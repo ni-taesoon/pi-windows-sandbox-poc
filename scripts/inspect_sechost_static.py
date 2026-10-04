@@ -60,11 +60,11 @@ def regular_no_reparse(path):
 def main():
     output = Path('lab-evidence')
     output.mkdir(exist_ok=True)
-    result = {'status': 'unavailable', 'target': 'sechost.dll'}
+    result = {'status': 'unavailable', 'target': 'bcrypt.dll'}
     try:
         if os.name != 'nt' or os.environ.get('ImageOS') != 'win22':
             raise ValueError('unsupported_environment')
-        target = Path(os.environ['SystemRoot']) / 'System32' / 'sechost.dll'
+        target = Path(os.environ['SystemRoot']) / 'System32' / 'bcrypt.dll'
         regular_no_reparse(target)
         if target.stat().st_size > LIMIT:
             raise ValueError('image_limit')
@@ -87,12 +87,12 @@ def main():
         if hashlib.sha256(target.read_bytes()).hexdigest() != image_hash:
             raise ValueError('image_changed')
         structure = summarize(image, data.decode('ascii', errors='replace'))
-        result = {'status': 'collected', 'target': 'sechost.dll', 'imageSha256': image_hash, 'outputBytes': len(data), 'outputSha256': hashlib.sha256(data).hexdigest(), 'structure': structure}
+        result = {'status': 'collected', 'target': 'bcrypt.dll', 'imageSha256': image_hash, 'outputBytes': len(data), 'outputSha256': hashlib.sha256(data).hexdigest(), 'structure': structure}
     except (ValueError, OSError, subprocess.SubprocessError, UnicodeError, KeyError):
         # Never print command output, host paths, disassembly or exception strings.
         result['status'] = 'collection_failed'
-    (output / 'sechost-static-summary.json').write_text(json.dumps(result), encoding='utf-8')
-    print('SECHOST_STATIC_COLLECTION_' + result['status'].upper())
+    (output / 'bcrypt-static-summary.json').write_text(json.dumps(result), encoding='utf-8')
+    print('BCRYPT_STATIC_COLLECTION_' + result['status'].upper())
 
 
 if __name__ == '__main__':

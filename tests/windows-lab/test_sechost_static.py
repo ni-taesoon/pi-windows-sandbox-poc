@@ -12,6 +12,14 @@ module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
 class BoundedToolTests(unittest.TestCase):
+    def test_collector_target_is_fixed_bcrypt_only(self):
+        source = (Path(__file__).resolve().parents[2] / 'scripts/inspect_sechost_static.py').read_text()
+        self.assertIn("/ 'System32' / 'bcrypt.dll'", source)
+        self.assertIn("output / 'bcrypt-static-summary.json'", source)
+        self.assertNotIn("'sechost.dll'", source)
+        self.assertNotIn('sys.argv', source)
+        self.assertNotIn('.write_bytes(data)', source)
+
     def test_success(self):
         self.assertEqual(module.bounded_run([sys.executable, '-c', 'print("ok")'], 8), b'ok\n')
     def test_size_limit(self):
