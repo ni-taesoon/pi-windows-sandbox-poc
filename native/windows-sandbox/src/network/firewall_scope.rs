@@ -37,6 +37,83 @@ pub(crate) fn validate(actual: &RuleScope, expected: &RuleScope) -> Result<(), &
     Ok(())
 }
 
+/// Diagnostic field names are compile-time constants, never COM-returned values.
+/// This function does not participate in admission or normalize any field.
+pub(crate) fn mismatched_fields(actual: &RuleScope, expected: &RuleScope) -> Vec<&'static str> {
+    let mut fields = Vec::new();
+    macro_rules! compare { ($($field:ident),+ $(,)?) => { $(
+        if actual.$field != expected.$field { fields.push(stringify!($field)); }
+    )+ }; }
+    compare!(
+        name,
+        description,
+        direction,
+        protocol,
+        action,
+        enabled,
+        profiles,
+        user,
+        application,
+        service,
+        local_addresses,
+        remote_addresses,
+        local_ports,
+        remote_ports,
+        interfaces_empty,
+        interface_types,
+        package,
+        owner,
+        remote_user,
+        remote_machine,
+        secure_flags,
+        edge_traversal
+    );
+    fields
+}
+
+/// Safe metadata only: string byte lengths, or scalar integers/booleans.
+/// Never format RuleScope or any raw COM string into a diagnostic.
+pub(crate) fn mismatch_metadata(actual: &RuleScope, expected: &RuleScope) -> Vec<String> {
+    let mut summaries = Vec::new();
+    macro_rules! strings { ($($field:ident),+ $(,)?) => { $(
+        if actual.$field != expected.$field {
+            summaries.push(format!("{}:actual_bytes={},expected_bytes={}",stringify!($field),actual.$field.len(),expected.$field.len()));
+        }
+    )+ }; }
+    macro_rules! scalars { ($($field:ident),+ $(,)?) => { $(
+        if actual.$field != expected.$field {
+            summaries.push(format!("{}:actual={},expected={}",stringify!($field),actual.$field,expected.$field));
+        }
+    )+ }; }
+    strings!(
+        name,
+        description,
+        user,
+        application,
+        service,
+        local_addresses,
+        remote_addresses,
+        local_ports,
+        remote_ports,
+        interface_types,
+        package,
+        owner,
+        remote_user,
+        remote_machine
+    );
+    scalars!(
+        direction,
+        protocol,
+        action,
+        enabled,
+        profiles,
+        interfaces_empty,
+        secure_flags,
+        edge_traversal
+    );
+    summaries
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,5 +367,84 @@ mod tests {
             validate(&actual, &expected).is_err(),
             "accepted unexpected user: {actual:?}"
         );
+    }
+    #[test]
+    fn diagnostics_identify_all_fields_without_string_values() {
+        let expected = expected();
+        let mut actual = expected.clone();
+        let secret = "DO_NOT_LOG_RAW_C:\\runner\\token-S-1-5-21-987654321";
+        macro_rules! change_strings { ($($field:ident),+ $(,)?) => { $(actual.$field=secret.into();)+ }; }
+        change_strings!(
+            name,
+            description,
+            user,
+            application,
+            service,
+            local_addresses,
+            remote_addresses,
+            local_ports,
+            remote_ports,
+            interface_types,
+            package,
+            owner,
+            remote_user,
+            remote_machine
+        );
+        actual.direction = 1;
+        actual.protocol = 17;
+        actual.action = 1;
+        actual.enabled = false;
+        actual.profiles = 1;
+        actual.interfaces_empty = false;
+        actual.secure_flags = 1;
+        actual.edge_traversal = 1;
+        assert_eq!(
+            mismatched_fields(&actual, &expected),
+            vec![
+                "name",
+                "description",
+                "direction",
+                "protocol",
+                "action",
+                "enabled",
+                "profiles",
+                "user",
+                "application",
+                "service",
+                "local_addresses",
+                "remote_addresses",
+                "local_ports",
+                "remote_ports",
+                "interfaces_empty",
+                "interface_types",
+                "package",
+                "owner",
+                "remote_user",
+                "remote_machine",
+                "secure_flags",
+                "edge_traversal"
+            ]
+        );
+        let details = mismatch_metadata(&actual, &expected);
+        assert_eq!(details.len(), 22);
+        let text = details.join(";");
+        assert!(!text.contains(secret));
+        assert!(!text.contains("S-1-5"));
+        assert!(!text.contains("runner"));
+        assert!(!text.contains("Pi Sandbox"));
+        assert!(text.contains("enabled:actual=false,expected=true"));
+        assert!(text.contains("protocol:actual=17,expected=6"));
+        assert!(text.contains(&format!(
+            "owner:actual_bytes={},expected_bytes=0",
+            secret.len()
+        )));
+        assert!(validate(&actual, &expected).is_err());
+    }
+    #[test]
+    fn exact_match_has_no_diagnostic_fields() {
+        let expected = expected();
+        assert!(mismatched_fields(&expected, &expected).is_empty());
+        assert!(mismatch_metadata(&expected, &expected).is_empty());
+        assert!(validate(&expected, &expected).is_ok());
     }
 }
