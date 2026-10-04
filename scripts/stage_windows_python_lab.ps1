@@ -34,6 +34,9 @@ if ($Phase -eq 'Stage') {
   . "$PSScriptRoot/windows_lab_stage_sources.ps1"
   $selection = Get-LabStageSources -PythonHome $PythonHome -BuildDirectory $BuildDirectory
   $PythonHome = $selection.runtimeRoot
+  foreach ($excluded in $selection.skippedRuntimeEntries) {
+    Write-Output ("LAB_STAGE_EXCLUDED_UNUSED_ALIAS: " + ($excluded | ConvertTo-Json -Compress))
+  }
   $approvedHashes = @($ExpectedDriverSha256, $ExpectedHelperSha256, $ExpectedPythonSha256, $ApprovedSourceSha256)
   if (@($approvedHashes | Where-Object { $_ -notmatch '^[0-9a-fA-F]{64}$' }).Count) { throw 'Explicit approved build/runtime/source SHA256 pins are required.' }
   foreach ($pin in @(
@@ -78,7 +81,7 @@ if ($Phase -eq 'Stage') {
     osCaption=$os.Caption; osBuild=$os.BuildNumber; imageOs=$env:ImageOS; sourceManifestSha256=$ApprovedSourceSha256; pythonSourcePath=$PythonHome; pythonFileVersion=(Get-Item -LiteralPath "$PythonHome\python.exe").VersionInfo.FileVersion; driverSha256=(Get-FileHash -Algorithm SHA256 -LiteralPath $driver).Hash;
     helperSha256=(Get-FileHash -Algorithm SHA256 -LiteralPath "$root\trusted\pi-windows-sandbox.exe").Hash;
     pythonSha256=(Get-FileHash -Algorithm SHA256 -LiteralPath "$root\runtime\python.exe").Hash;
-    nativeValidated=$false } | ConvertTo-Json | Set-Content -LiteralPath "$root\trusted\stage-evidence.json" -Encoding UTF8
+    excludedRuntimeEntries=@($selection.skippedRuntimeEntries); nativeValidated=$false } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath "$root\trusted\stage-evidence.json" -Encoding UTF8
   Write-Output 'LAB_STAGED_ONLY: no account or sandbox Python process created.'
   exit 0
 }

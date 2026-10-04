@@ -47,9 +47,25 @@ function Get-LabStageSources {
   $pending = [Collections.Generic.Queue[string]]::new()
   $pending.Enqueue($runtime)
   $entries = [Collections.Generic.List[object]]::new()
+  $skipped = [Collections.Generic.List[object]]::new()
   while ($pending.Count) {
     $source = $pending.Dequeue()
     $item = Get-Item -LiteralPath $source -Force
+    # The observed setup-python root alias is unused: the fixed command runs
+    # python.exe. Exclude only this exact non-directory SymbolicLink, without
+    # reading/resolving its target. Every other reparse remains an error.
+    if ($source -eq (Join-Path $runtime 'python3.exe')) {
+      if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::Directory)) {
+        throw "Unused root alias must not be a directory: $source"
+      }
+      if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -and
+          $item.PSObject.Properties['LinkType'] -and $item.LinkType -eq 'SymbolicLink') {
+        $skipped.Add([pscustomobject]@{ source=$item.FullName; relative='python3.exe';
+          reason='unused-root-python3-symbolic-link-not-copied'; linkType=$item.LinkType;
+          attributes=$item.Attributes.ToString() })
+        continue
+      }
+    }
     Assert-LabSourceItem -Item $item -Role 'python-runtime'
     if ($source -ne $runtime) {
       $relative = [IO.Path]::GetRelativePath($runtime, $item.FullName)
@@ -62,5 +78,5 @@ function Get-LabStageSources {
     }
   }
   if (-not ($entries | Where-Object { $_.relative -eq 'python.exe' -and -not $_.isDirectory })) { throw 'Missing existing official runner Python runtime.' }
-  [pscustomobject]@{ runtimeRoot=$runtime; helper=$helper; driver=$driver; runtimeEntries=$entries.ToArray() }
+  [pscustomobject]@{ runtimeRoot=$runtime; helper=$helper; driver=$driver; runtimeEntries=$entries.ToArray(); skippedRuntimeEntries=$skipped.ToArray() }
 }
