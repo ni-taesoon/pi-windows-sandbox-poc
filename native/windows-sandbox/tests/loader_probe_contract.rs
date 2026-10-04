@@ -61,3 +61,28 @@ fn compiler_range_check_failure_is_intrinsic_and_nonreturning() {
     assert!(BUILD.contains("/NODEFAULTLIB"));
     assert!(BUILD.contains("verify-probe"));
 }
+
+#[test]
+fn dependency_sequence_is_fixed_bounded_and_precedes_python() {
+    let entry = PROBE
+        .split("void WINAPI lab_probe_entry(void) {")
+        .nth(1)
+        .unwrap();
+    let expected = [
+        "ucrtbase", "msvcrt", "rpcrt4", "sechost", "advapi32", "bcrypt", "version", "ws2_32",
+    ];
+    let actual: Vec<_> = entry
+        .lines()
+        .filter(|line| line.trim_start().starts_with("load_system("))
+        .collect();
+    assert_eq!(actual.len(), expected.len());
+    for (line, name) in actual.iter().zip(expected) {
+        assert_eq!(
+            line.trim(),
+            format!("load_system(L\"\\\\{name}.dll\",\"{name}\");")
+        );
+    }
+    assert!(entry.find("\"ws2_32\"").unwrap() < entry.find("\"python312\"").unwrap());
+    assert!(PROBE.contains("if (length >= 32767)"));
+    assert!(!PROBE.contains("FreeLibrary("));
+}

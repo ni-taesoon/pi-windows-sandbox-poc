@@ -38,18 +38,31 @@ static void load_fixed(const WCHAR *path, const char *stage) {
     emit(stage,0);
     /* Keep the fixed modules loaded until process exit; no export calls. */
 }
+/* Only fixed call-site tails are accepted; no user input or PATH resolution. */
+static void load_system(const WCHAR *tail, const char *stage) {
+    DWORD length = GetSystemDirectoryW(system_library,32768);
+    if (length == 0) { DWORD error=GetLastError(); emit("system-directory",error); ExitProcess(error ? error : 1); }
+    if (length >= 32768-32) { emit("system-directory",ERROR_INSUFFICIENT_BUFFER); ExitProcess(ERROR_INSUFFICIENT_BUFFER); }
+    while (*tail) {
+        if (length >= 32767) { emit("system-directory",ERROR_INSUFFICIENT_BUFFER); ExitProcess(ERROR_INSUFFICIENT_BUFFER); }
+        system_library[length++] = *tail++;
+    }
+    system_library[length] = 0;
+    load_fixed(system_library,stage);
+}
 void WINAPI lab_probe_entry(void) {
-    DWORD length;
-    const WCHAR *tail = L"\\ucrtbase.dll";
     emit("entry",0);
     Sleep(100); /* Bounded independent observer opportunity; still inside the 15s job deadline. */
-    length = GetSystemDirectoryW(system_library,32768);
-    if (length == 0) { DWORD error=GetLastError(); emit("system-directory",error); ExitProcess(error ? error : 1); }
-    if (length >= 32768-16) { emit("system-directory",ERROR_INSUFFICIENT_BUFFER); ExitProcess(ERROR_INSUFFICIENT_BUFFER); }
-    while (*tail) system_library[length++] = *tail++;
-    system_library[length] = 0;
-    load_fixed(system_library,"ucrtbase");
+    load_system(L"\\ucrtbase.dll","ucrtbase");
     load_fixed(L"C:\\PiSandboxLab\\runtime\\vcruntime140.dll","vcruntime140");
+    /* Diagnostic dependency-first order, not a claim about Windows loader order. */
+    load_system(L"\\msvcrt.dll","msvcrt");
+    load_system(L"\\rpcrt4.dll","rpcrt4");
+    load_system(L"\\sechost.dll","sechost");
+    load_system(L"\\advapi32.dll","advapi32");
+    load_system(L"\\bcrypt.dll","bcrypt");
+    load_system(L"\\version.dll","version");
+    load_system(L"\\ws2_32.dll","ws2_32");
     load_fixed(L"C:\\PiSandboxLab\\runtime\\python312.dll","python312");
     emit("complete",0);
     ExitProcess(0);
