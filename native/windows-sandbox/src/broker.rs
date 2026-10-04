@@ -383,6 +383,16 @@ pub unsafe fn run_via_dedicated_helper(
         "helper_startup_access={}",
         serde_json::to_string(&startup_diagnostics)?
     );
+    #[cfg(feature = "lab-loader-trace")]
+    {
+        let loader_trace: crate::loader_trace::LoaderTrace = pipe
+            .receive(response_deadline)
+            .context("helper loader trace unavailable")?;
+        eprintln!(
+            "helper_loader_trace={}",
+            serde_json::to_string(&loader_trace)?
+        );
+    }
     let result: RunResult = pipe
         .receive(response_deadline)
         .context("helper failed; account ACLs retained for verified recovery")?;
@@ -440,6 +450,23 @@ pub fn helper_main(name: &str, expected_broker: u32) -> Result<()> {
             &startup_diagnostics,
             Instant::now() + Duration::from_secs(10),
         )?;
+        #[cfg(feature = "lab-loader-trace")]
+        let result = {
+            let mut trace = crate::loader_trace::LoaderTrace::default();
+            let result = crate::process::run_restricted_with_parent_trace(
+                restricted.raw(),
+                &payload.private_desktop,
+                &request,
+                &parent,
+                &mut trace,
+            );
+            if result.is_err() {
+                trace.runner_failed();
+            }
+            pipe.send(&trace, Instant::now() + Duration::from_secs(10))?;
+            result?
+        };
+        #[cfg(not(feature = "lab-loader-trace"))]
         let result = crate::process::run_restricted_with_parent(
             restricted.raw(),
             &payload.private_desktop,
