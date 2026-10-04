@@ -101,9 +101,9 @@ void WINAPI lab_probe_entry(void) {
     load_system(L"\\msvcrt.dll","msvcrt");
     load_system(L"\\rpcrt4.dll","rpcrt4");
     self_access();
+    load_system(L"\\bcrypt.dll","bcrypt");
     load_system(L"\\sechost.dll","sechost");
     load_system(L"\\advapi32.dll","advapi32");
-    load_system(L"\\bcrypt.dll","bcrypt");
     load_system(L"\\version.dll","version");
     load_system(L"\\ws2_32.dll","ws2_32");
     load_fixed(L"C:\\PiSandboxLab\\runtime\\python312.dll","python312");
