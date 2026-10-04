@@ -40,3 +40,7 @@
 ## 결과 기록
 
 각 시험에 실행 시각, commit/버전, 정책 hash, 명령, expected/observed, 원시 로그 위치와 실패 재현 절차를 남깁니다. 자격증명과 개인 파일 내용은 로그에서 제거합니다. 아직 채워지지 않은 결과를 `PASS`로 표시하지 않습니다.
+
+## 준비 도구
+
+[WINDOWS_LAB_PREPARATION.md](WINDOWS_LAB_PREPARATION.md)의 읽기 전용 collector와 증거 양식을 사용할 수 있습니다. collector는 실행 하네스가 아니며 항상 BLOCKED/NOT_RUN을 기록합니다. 실제 lab driver와 독립 observer, Windows 환경 및 보안 변경 승인은 별도로 필요합니다.

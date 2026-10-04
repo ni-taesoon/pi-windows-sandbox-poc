@@ -82,3 +82,7 @@ python3 -B -m unittest discover -s tests/python-probe -p 'test_*.py' -v
 ## 다음 단계
 
 [Windows 검증 계획](docs/WINDOWS_VALIDATION.md)에 따라 별도 테스트 환경에서 빌드·통합·격리 검사를 수행합니다. [Python probe](docs/PYTHON_PROBE.md)는 그 검사의 일부를 돕는 도구이며 전체 보안 검사를 대체하지 않습니다. 미완료 통합과 승인 경로를 구현하고 검증한 다음에만 정식 실행 게이트를 열 수 있습니다.
+
+## Windows 검증 준비
+
+[검증 준비 도구](docs/WINDOWS_LAB_PREPARATION.md)는 소스·빌드·증거 파일 hash와 미실행 시험 항목을 수집합니다. 프로세스 실행이나 보안 변경을 하지 않으며 실제 Windows 검증을 대체하지 않습니다. [리뷰 수정 증거](docs/REVIEW_FIX_EVIDENCE.md)와 함께 확인하세요.
