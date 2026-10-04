@@ -79,7 +79,7 @@
           "sha256": "798143ed6115dadd36ba35cc3edf6beb94def870269e954a8a01dc74a3c23306"
         }
       ],
-      "adapted_sha256": "7efcc35f34f94a2b0e8ff107c197966fb604725d4c458465f2bb048b9809e7c1"
+      "adapted_sha256": "c831775618e9325dc1c8736344e9b8aafe4ed1559ba6b278aad76aa22169fc84"
     },
     {
       "destination": "native/windows-sandbox/src/network/wfp.rs",

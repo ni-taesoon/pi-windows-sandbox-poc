@@ -463,10 +463,16 @@ fn verify_rule(rule: &INetFwRule3, spec: &BlockRuleSpec<'_>) -> Result<()> {
             format!("firewall scope read-back failed: {err:?}"),
         ))
     })?;
-    firewall_scope::validate(&actual, &expected_rule_scope(spec)).map_err(|reason| {
+    let expected = expected_rule_scope(spec);
+    firewall_scope::validate(&actual, &expected).map_err(|reason| {
         anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperFirewallRuleVerifyFailed,
-            format!("rule {}: {reason}", spec.internal_name),
+            format!(
+                "rule {}: {reason}; mismatched_fields={:?}; safe_metadata={:?}",
+                spec.internal_name,
+                firewall_scope::mismatched_fields(&actual, &expected),
+                firewall_scope::mismatch_metadata(&actual, &expected)
+            ),
         ))
     })
 }
