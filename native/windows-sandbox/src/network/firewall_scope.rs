@@ -1,5 +1,8 @@
 //! Portable firewall readback contract, used by the Windows COM adapter.
 //! These tests verify admission decisions, not Windows packet enforcement.
+#[path = "address_sets.rs"]
+mod address_sets;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RuleScope {
     pub name: String,
@@ -26,12 +29,36 @@ pub(crate) struct RuleScope {
     pub edge_traversal: i32,
 }
 
-// Compare the complete readback, not a SID substring. Strict string equality is
-// intentional: unfamiliar COM normalization is a setup failure, never a reason
-// to silently broaden or trust a colliding rule. The adapter explicitly sets
-// wildcard fields on newly created rules.
+// Every field except remote_addresses remains exact. The one numeric IP selector
+// is compared by its full parsed union; invalid or changed sets fail closed.
 pub(crate) fn validate(actual: &RuleScope, expected: &RuleScope) -> Result<(), &'static str> {
-    if actual != expected {
+    macro_rules! exact { ($($field:ident),+ $(,)?) => { $(actual.$field == expected.$field)&&+ }; }
+    let other_fields_exact = exact!(
+        name,
+        description,
+        direction,
+        protocol,
+        action,
+        enabled,
+        profiles,
+        user,
+        application,
+        service,
+        local_addresses,
+        local_ports,
+        remote_ports,
+        interfaces_empty,
+        interface_types,
+        package,
+        owner,
+        remote_user,
+        remote_machine,
+        secure_flags,
+        edge_traversal
+    );
+    if !other_fields_exact
+        || !address_sets::equivalent(&actual.remote_addresses, &expected.remote_addresses)
+    {
         return Err("firewall rule differs from the complete expected scope; refusing to adopt or modify it");
     }
     Ok(())
@@ -446,5 +473,17 @@ mod tests {
         assert!(mismatched_fields(&expected, &expected).is_empty());
         assert!(mismatch_metadata(&expected, &expected).is_empty());
         assert!(validate(&expected, &expected).is_ok());
+    }
+    #[test]
+    fn accepts_equivalent_dotted_remote_mask_but_no_other_field_change() {
+        let expected = expected();
+        let mut actual = expected.clone();
+        actual.remote_addresses = "127.0.0.0/255.0.0.0,::/127".into();
+        assert!(validate(&actual, &expected).is_ok());
+        actual.local_addresses = "0.0.0.0/0,::/0".into();
+        assert!(
+            validate(&actual, &expected).is_err(),
+            "local selector must remain exact"
+        );
     }
 }

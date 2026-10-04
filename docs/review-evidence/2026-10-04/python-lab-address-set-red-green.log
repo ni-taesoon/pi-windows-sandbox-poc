@@ -1,0 +1,4 @@
+Historical exact-comparator source SHA256 matched frozen manifest: f196d8edd8cc04d0d6b6f6a7a507e6f5da40ec9e06dc0f451849f789d473da91
+New equivalent-dotted-mask regression against historical comparator: RED (exit101, expected assertion failure).
+Current parser/comparator regression and firewall suite: GREEN (31 tests passed).
+Pure local tests, not real COM representation evidence or Windows enforcement.
