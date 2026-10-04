@@ -4,10 +4,10 @@ Actual GitHub run: https://github.com/ni-taesoon/pi-windows-sandbox-poc/actions/
 
 The parent retrieved the actual Windows run evidence: MSVC build/link and the
 previous mocked PowerShell selector regression passed. Staging then correctly
-refused this exact runtime entry:
+refused this root-level runtime entry:
 
 - sourceRole: `python-runtime`
-- path: `C:\hostedtoolcache\windows\Python\3.12.10\x64\python3.exe`
+- path: `<PythonHome>\python3.exe` (runtime-relative description; host path omitted)
 - LinkType: `SymbolicLink`
 - attributes: `Archive, ReparsePoint`
 
@@ -37,4 +37,4 @@ because PowerShell is unavailable; they run on the next fresh approved Windows V
 Portable Rust source-contract results are recorded separately. No publication or
 workflow dispatch was performed by this patch task.
 
-[Preserved run metadata](../windows-run-37190848450/metadata.json) and [decoded job log](../windows-run-37190848450/job.log) provide the exact observed path and failure phase. [Digests](../windows-run-37190848450/SHA256SUMS.txt) cover the safe evidence files.
+The [original Actions run](https://github.com/ni-taesoon/pi-windows-sandbox-poc/actions/runs/37190848450) supports this technical summary. Raw runner logs, metadata, and their evidence manifests are retained privately and excluded from the current published source tree.

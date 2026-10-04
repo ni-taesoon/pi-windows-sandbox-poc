@@ -41,6 +41,6 @@ ancestor is actually a reparse point, the next run will still refuse with its ex
 path. Any further packaging change needs that evidence and review first. Retry only
 on a fresh approved disposable VM; production activation remains false.
 
-## Preserved original evidence
+## Evidence scope
 
-[Run metadata](../windows-run-37189834072/metadata.json), [decoded job log](../windows-run-37189834072/job.log), and [file digests](../windows-run-37189834072/SHA256SUMS.txt) are retained with the five safe artifact files. The decoded log has LF-normalized line endings and preserves GitHub credential redactions. No credential store was created or collected in this attempt.
+The [original Actions run](https://github.com/ni-taesoon/pi-windows-sandbox-poc/actions/runs/37189834072) supports this technical summary. Raw runner logs, metadata, and their evidence manifests are retained privately and excluded from the current published source tree. No credential store was created or collected in this attempt.

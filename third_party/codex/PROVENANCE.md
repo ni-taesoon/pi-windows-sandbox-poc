@@ -99,3 +99,12 @@ constant phase/API labels and numeric Win32 error codes. Desired access masks,
 object security, operation order and fail-closed behavior are unchanged. New
 source-contract coverage checks label completeness; no upstream validation claim
 or additional permission grant is implied.
+
+## Query-only dedicated-helper admission
+
+Measured denial of the broker's expanded helper-token OpenProcessToken request
+led to a product integration correction: helper-only admission now uses the actual
+helper's TOKEN_QUERY identity/logon information without constructing an unused
+cross-account restricted token. The helper retains its own restriction step.
+Standalone admission remains restricted; helper-only state cannot run directly.
+No token DACL or account privilege is broadened.
