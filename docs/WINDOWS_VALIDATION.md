@@ -4,19 +4,21 @@
 
 ## 준비와 승인
 
-- 업무 데이터와 기존 Codex가 없는 폐기 가능한 Windows 테스트 호스트를 사용합니다.
-- OS edition/build/아키텍처, 계정 권한, 보안 제품/GPO, Node·Python·Codex·supervisor 버전과 파일 hash를 기록합니다.
+- 업무 데이터가 없는 폐기 가능한 Windows 테스트 호스트를 사용합니다. Codex 설치는 필요하지 않습니다. 원본 제품과의 보안 객체 이름 충돌이 없는지도 별도로 확인합니다.
+- OS edition/build/아키텍처, 계정 권한, 보안 제품/GPO, Node·Python·자체 Rust helper 버전과 파일 hash를 기록합니다.
 - 테스트 담당자는 계정/ACL/방화벽/WFP 변경 및 UAC가 발생할 수 있음을 검토하고 승인합니다. 스크립트가 보안 제품을 끄거나 정책을 우회해서는 안 됩니다.
-- supervisor는 신뢰할 수 있는 빌드 환경에서 빌드하고, 권한이 보호된 위치에서 실행합니다. 다운로드 경로나 사용자 입력으로 실행 파일을 자동 선택하지 않습니다.
+- 자체 Rust helper는 신뢰할 수 있는 Windows 빌드 환경에서 빌드하고, 권한이 보호된 위치에서 실행합니다. 다운로드 경로나 사용자 입력으로 실행 파일을 자동 선택하지 않습니다.
 
 ## 합격 기준
 
+생산용 실행 API와 인증된 broker 승인 경로가 아직 완성되지 않았으므로, 아래 표는 저수준 라이브러리 및 향후 통합을 검증하는 기준입니다. validation flag를 바꾸는 것으로 미완료 코드를 대체하지 않습니다.
+
 | 시험 | 필수 관측 결과 |
 | --- | --- |
-| supervisor 기본 실행 | 정해진 exit code와 stdout/stderr가 유지되고 root/후손 Job 소속 확인 |
+| 자체 helper 기본 실행 | 정해진 exit code와 stdout/stderr가 유지되고 root/후손 Job 소속 확인 |
 | 정상 종료 뒤 백그라운드 후손 | 실행 명령이 먼저 끝나도 후손이 모두 종료되고 완료 보고 |
 | 부모 broker/감독 프로세스 강제 종료 | 손자 프로세스와 장기 실행 작업이 남지 않음 |
-| 계정 전환 | 실제 Codex 전용 계정 runner와 모든 후손이 outer Job에 남음 |
+| 계정 전환 | 제품 전용 계정 helper와 모든 후손이 검증된 Job 경계 안에 남음 |
 | 제한 밖 파일 변경 | 생성/수정/삭제/rename/ACL/owner 변경 차단, 파일 상태 불변 |
 | 명시적 읽기 deny | Node/Python/셸/파일 도구에서 같은 경로 접근 차단 |
 | 경로 우회 | junction, symlink, hardlink, ADS, drive alias, rename race를 통한 우회 차단 |
@@ -38,3 +40,7 @@
 ## 결과 기록
 
 각 시험에 실행 시각, commit/버전, 정책 hash, 명령, expected/observed, 원시 로그 위치와 실패 재현 절차를 남깁니다. 자격증명과 개인 파일 내용은 로그에서 제거합니다. 아직 채워지지 않은 결과를 `PASS`로 표시하지 않습니다.
+
+## 준비 도구
+
+[WINDOWS_LAB_PREPARATION.md](WINDOWS_LAB_PREPARATION.md)의 읽기 전용 collector와 증거 양식을 사용할 수 있습니다. collector는 실행 하네스가 아니며 항상 BLOCKED/NOT_RUN을 기록합니다. 실제 lab driver와 독립 observer, Windows 환경 및 보안 변경 승인은 별도로 필요합니다.

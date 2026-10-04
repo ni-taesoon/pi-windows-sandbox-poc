@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pi-sandbox:windows-lab-test-result:v1",
+  "title": "One narrow Windows lab observation, never global certification",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "status", "expected", "observed", "startedAt", "endedAt", "command", "policySha256", "sourceManifestSha256", "rawEvidence", "reproduction"],
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "status": {"enum": ["NOT_RUN", "BLOCKED", "SKIP", "PASS", "FAIL", "INCONCLUSIVE"]},
+    "expected": {"type": "string", "minLength": 1},
+    "observed": {"type": ["object", "null"], "description": "Structured observer facts: numeric error codes, process identity/creation time/handle wait results, file hashes, network baseline/correlation, and missing evidence. Never credentials or benign fixture contents."},
+    "startedAt": {"type": ["string", "null"], "format": "date-time"},
+    "endedAt": {"type": ["string", "null"], "format": "date-time"},
+    "command": {"type": ["array", "null"], "items": {"type": "string"}},
+    "policySha256": {"oneOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]},
+    "sourceManifestSha256": {"$ref": "#/$defs/hash"},
+    "rawEvidence": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["relativePath", "sha256", "kind"],
+        "properties": {
+          "relativePath": {"type": "string", "minLength": 1, "description": "Trusted evidence-relative reference only; consumers must reject traversal, links, absolute paths and device paths."},
+          "sha256": {"$ref": "#/$defs/hash"},
+          "kind": {"enum": ["observer", "stdout", "stderr", "baseline", "build-log", "policy", "recovery"]}
+        }
+      }
+    },
+    "reproduction": {"type": ["string", "null"]}
+  },
+  "$defs": {"hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"enum": ["PASS", "FAIL", "INCONCLUSIVE"]}}},
+      "then": {
+        "properties": {
+          "observed": {"type": "object", "minProperties": 1},
+          "startedAt": {"type": "string", "format": "date-time"},
+          "endedAt": {"type": "string", "format": "date-time"},
+          "command": {"type": "array", "minItems": 1},
+          "policySha256": {"$ref": "#/$defs/hash"},
+          "rawEvidence": {"minItems": 1},
+          "reproduction": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"status": {"const": "NOT_RUN"}}},
+      "then": {"properties": {"observed": {"type": "null"}, "startedAt": {"type": "null"}, "endedAt": {"type": "null"}, "command": {"type": "null"}, "rawEvidence": {"maxItems": 0}}}
+    }
+  ]
+}

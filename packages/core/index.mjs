@@ -26,6 +26,7 @@ export const ERROR_CODES = Object.freeze([
   "BROKER_LOST",
   "CLEANUP_UNCONFIRMED",
   "FILE_CONFLICT",
+  "FILE_OPERATION_FAILED",
 ]);
 export class SandboxError extends Error {
   constructor(code, message) {
@@ -120,9 +121,9 @@ export function canonicalWindowsPath(value) {
     )
   )
     fail("POLICY_DENIED", "Ambiguous Windows path");
-  return win32
-    .normalize(value)
-    .replace(/\\$/, value.length === 3 ? "\\" : "")
+  const normalized = win32.normalize(value);
+  return normalized
+    .replace(/\\$/, normalized.length === 3 ? "\\" : "")
     .toLowerCase();
 }
 export function isWithin(path, root) {
@@ -648,7 +649,16 @@ export class SandboxBroker {
             ["encoding", "content", "eof"],
           );
           choice(result.data.encoding, ["utf8", "base64"]);
-          str(result.data.content, operation.maxOutputBytes * 2);
+          if (typeof result.data.content !== "string")
+            fail("BROKER_LOST", "Invalid read content");
+          // The limit is decoded content bytes, not JSON/base64 transport overhead.
+          if (
+            result.data.encoding === "base64" &&
+            !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
+              result.data.content,
+            )
+          )
+            fail("BROKER_LOST", "Invalid base64 read content");
           if (typeof result.data.eof !== "boolean")
             fail("BROKER_LOST", "Invalid read result");
           if (result.data.hash !== undefined) hash(result.data.hash);
@@ -659,10 +669,13 @@ export class SandboxBroker {
             integer(result.data.bytesWritten, 0, Number.MAX_SAFE_INTEGER);
         }
       }
+      const contentBytes =
+        operation.kind === "read" && result.data !== undefined
+          ? Buffer.byteLength(result.data.content, result.data.encoding)
+          : 0;
       if (
-        result.data !== undefined &&
-        Buffer.byteLength(JSON.stringify(result.data)) >
-          operation.maxOutputBytes - kept
+        contentBytes > operation.maxOutputBytes - kept ||
+        (operation.kind === "read" && contentBytes > operation.length)
       ) {
         truncated = true;
         r.reason ??= "OUTPUT_LIMIT";
@@ -690,6 +703,7 @@ export class SandboxBroker {
       const safeCodes = [
         "POLICY_DENIED",
         "FILE_CONFLICT",
+        "FILE_OPERATION_FAILED",
         "TIMEOUT",
         "CANCELLED",
         "OUTPUT_LIMIT",

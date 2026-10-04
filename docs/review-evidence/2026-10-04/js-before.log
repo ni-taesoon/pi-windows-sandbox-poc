@@ -1,0 +1,89 @@
+✖ UTF-8 byte ranges preserve every byte across multibyte boundaries and permit session reuse (142.043188ms)
+✖ Pi read exposes lossless encoding metadata for invalid UTF-8, then reuses the session (64.20582ms)
+✖ missing file is FILE_OPERATION_FAILED with verified cleanup and next Pi read succeeds (71.251527ms)
+✖ invalid UTF-8 edit is recoverable without mutation and subsequent read succeeds (57.69801ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 0
+ℹ fail 4
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 419.839424
+
+✖ failing tests:
+
+test at tests/native-backend/file-regressions.test.mjs:49:1
+✖ UTF-8 byte ranges preserve every byte across multibyte boundaries and permit session reuse (142.043188ms)
+  AssertionError [ERR_ASSERTION]: offset=1: {"terminal":{"exitCode":0,"terminated":false,"cleanupVerified":false,"error":{"code":"BROKER_LOST"}},"broker":{"requestId":"f35a6abe-4923-4d48-aba7-a0474370d1d5","sessionId":"84661b87-0675-4d66-95a8-dc9bc81b5522","policyHash":"8eaf9591be98b5ec5ae6a86e94148bea74843f8cd7fb289b198da60e3ac5a410","outcome":"unknown","error":{"code":"CLEANUP_UNCONFIRMED","message":"Backend did not confirm process-tree termination"},"outputs":[],"bytesSeen":0,"truncated":false},"state":"BLOCKED"}
+  + actual - expected
+  
+  + 'unknown'
+  - 'success'
+  
+      at TestContext.<anonymous> (file://<workspace>/pi-windows-sandbox-poc/tests/native-backend/file-regressions.test.mjs:55:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'unknown',
+    expected: 'success',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/native-backend/file-regressions.test.mjs:66:1
+✖ Pi read exposes lossless encoding metadata for invalid UTF-8, then reuses the session (64.20582ms)
+  Error: Backend did not confirm process-tree termination
+      at failure (file://<workspace>/pi-windows-sandbox-poc/packages/pi-adapter/index.js:45:17)
+      at Object.execute (file://<workspace>/pi-windows-sandbox-poc/packages/pi-adapter/index.js:164:17)
+      at async TestContext.<anonymous> (file://<workspace>/pi-windows-sandbox-poc/tests/native-backend/file-regressions.test.mjs:70:18)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    code: 'CLEANUP_UNCONFIRMED'
+  }
+
+test at tests/native-backend/file-regressions.test.mjs:79:1
+✖ missing file is FILE_OPERATION_FAILED with verified cleanup and next Pi read succeeds (71.251527ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    Comparison {
+  +   code: 'BROKER_LOST'
+  -   code: 'FILE_OPERATION_FAILED'
+    }
+  
+      at async TestContext.<anonymous> (file://<workspace>/pi-windows-sandbox-poc/tests/native-backend/file-regressions.test.mjs:82:3)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: Error: Native backend failed
+        at failure (file://<workspace>/pi-windows-sandbox-poc/packages/pi-adapter/index.js:45:17)
+        at Object.execute (file://<workspace>/pi-windows-sandbox-poc/packages/pi-adapter/index.js:164:17)
+        at async waitForActual (node:assert:646:5)
+        at async strict.rejects (node:assert:769:25)
+        at async TestContext.<anonymous> (file://<workspace>/pi-windows-sandbox-poc/tests/native-backend/file-regressions.test.mjs:82:3)
+        at async Test.run (node:internal/test_runner/test:1389:7)
+        at async Test.processPendingSubtests (node:internal/test_runner/test:960:7),
+    expected: { code: 'FILE_OPERATION_FAILED' },
+    operator: 'rejects',
+    diff: 'simple'
+  }
+
+test at tests/native-backend/file-regressions.test.mjs:89:1
+✖ invalid UTF-8 edit is recoverable without mutation and subsequent read succeeds (57.69801ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  'unknown' !== 'error'
+  
+      at TestContext.<anonymous> (file://<workspace>/pi-windows-sandbox-poc/tests/native-backend/file-regressions.test.mjs:93:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'unknown',
+    expected: 'error',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

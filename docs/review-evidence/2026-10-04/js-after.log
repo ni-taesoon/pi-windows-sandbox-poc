@@ -1,0 +1,12 @@
+✔ UTF-8 byte ranges preserve every byte across multibyte boundaries and permit session reuse (705.060427ms)
+✔ Pi read exposes lossless encoding metadata for invalid UTF-8, then reuses the session (137.557718ms)
+✔ missing file is FILE_OPERATION_FAILED with verified cleanup and next Pi read succeeds (116.230112ms)
+✔ invalid UTF-8 edit is recoverable without mutation and subsequent read succeeds (121.959604ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1162.362163

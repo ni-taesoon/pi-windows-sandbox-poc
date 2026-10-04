@@ -1,0 +1,6 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> pi-windows-sandbox-poc@0.2.0 check
+> node scripts/check-source.mjs
+
+Syntax checked 12 JavaScript modules; failures=0

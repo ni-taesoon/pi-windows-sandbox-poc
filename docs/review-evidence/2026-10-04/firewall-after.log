@@ -1,0 +1,43 @@
+   Compiling pi-windows-sandbox v0.1.0 (<workspace>/pi-windows-sandbox-poc/native/windows-sandbox)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running unittests src/lib.rs (native/windows-sandbox/target/debug/deps/pi_windows_sandbox-dbc474577ed82c26)
+
+running 23 tests
+test firewall_scope::tests::accepts_exact_readback ... ok
+test firewall_scope::tests::rejects_unexpected_action ... ok
+test firewall_scope::tests::rejects_unexpected_application ... ok
+test firewall_scope::tests::rejects_unexpected_direction ... ok
+test firewall_scope::tests::rejects_unexpected_edge_traversal ... ok
+test firewall_scope::tests::rejects_unexpected_description ... ok
+test firewall_scope::tests::rejects_unexpected_enabled ... ok
+test firewall_scope::tests::rejects_unexpected_interface_types ... ok
+test firewall_scope::tests::rejects_unexpected_interfaces_empty ... ok
+test firewall_scope::tests::rejects_unexpected_local_addresses ... ok
+test firewall_scope::tests::rejects_unexpected_name ... ok
+test firewall_scope::tests::rejects_unexpected_local_ports ... ok
+test firewall_scope::tests::rejects_unexpected_profiles ... ok
+test firewall_scope::tests::rejects_unexpected_owner ... ok
+test firewall_scope::tests::rejects_unexpected_package ... ok
+test firewall_scope::tests::rejects_unexpected_protocol ... ok
+test firewall_scope::tests::rejects_unexpected_remote_addresses ... ok
+test firewall_scope::tests::rejects_unexpected_remote_machine ... ok
+test firewall_scope::tests::rejects_unexpected_remote_ports ... ok
+test firewall_scope::tests::rejects_unexpected_remote_user ... ok
+test firewall_scope::tests::rejects_unexpected_secure_flags ... ok
+test firewall_scope::tests::rejects_unexpected_service ... ok
+test firewall_scope::tests::rejects_unexpected_user ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (native/windows-sandbox/target/debug/deps/pi_windows_sandbox-8f8178292b177dd2)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/broker_wait_contract.rs (native/windows-sandbox/target/debug/deps/broker_wait_contract-15626d02e49faf3f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+

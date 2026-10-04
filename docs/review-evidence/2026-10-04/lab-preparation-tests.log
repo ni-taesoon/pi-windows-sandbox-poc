@@ -1,0 +1,23 @@
+test_bad_paths (test_collector.CollectorTests.test_bad_paths) ... ok
+test_changed_source_is_recorded (test_collector.CollectorTests.test_changed_source_is_recorded) ... ok
+test_duplicate_manifest (test_collector.CollectorTests.test_duplicate_manifest) ... ok
+test_empty_manifest (test_collector.CollectorTests.test_empty_manifest) ... ok
+test_evidence_cannot_claim_pass (test_collector.CollectorTests.test_evidence_cannot_claim_pass) ... ok
+test_hardlink (test_collector.CollectorTests.test_hardlink) ... ok
+test_helper_only_hashed (test_collector.CollectorTests.test_helper_only_hashed) ... ok
+test_malformed_manifest (test_collector.CollectorTests.test_malformed_manifest) ... ok
+test_missing_gate (test_collector.CollectorTests.test_missing_gate) ... ok
+test_no_source_mutation (test_collector.CollectorTests.test_no_source_mutation) ... ok
+test_policy_content_not_output (test_collector.CollectorTests.test_policy_content_not_output) ... ok
+test_size_limit (test_collector.CollectorTests.test_size_limit) ... ok
+test_success_is_only_blocked_preparation (test_collector.CollectorTests.test_success_is_only_blocked_preparation) ... ok
+test_symlink_ancestor (test_collector.CollectorTests.test_symlink_ancestor) ... ok
+test_symlink_file (test_collector.CollectorTests.test_symlink_file) ... ok
+test_not_run_with_observed_result_rejected (test_collector.SchemaTests.test_not_run_with_observed_result_rejected) ... ok
+test_pass_without_evidence_rejected (test_collector.SchemaTests.test_pass_without_evidence_rejected) ... ok
+test_records_validate (test_collector.SchemaTests.test_records_validate) ... ok
+
+----------------------------------------------------------------------
+Ran 18 tests in 0.064s
+
+OK

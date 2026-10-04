@@ -1,0 +1,9 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running tests/broker_wait_contract.rs (native/windows-sandbox/target/debug/deps/broker_wait_contract-15626d02e49faf3f)
+
+running 2 tests
+test dedicated_helper_uses_transferred_wait_handle_not_cross_account_open ... ok
+test handoff_is_wait_only_noninheritable_and_precedes_admission_and_resume ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

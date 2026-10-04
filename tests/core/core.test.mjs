@@ -522,3 +522,74 @@ test("close during capability query prevents native prepare from starting", asyn
   assert.equal(prepareCalls, 0);
   assert.equal(broker.getStatus().state, "READY");
 });
+
+test("redundant root separators remain absolute drive roots and cannot be write roots", () => {
+  for (const root of ["C:\\\\", "C:////", "C:\\/\\"]) {
+    assert.equal(canonicalWindowsPath(root), "c:\\");
+    assert.throws(
+      () => createPolicy({ ...input(), writeRoots: [root] }),
+      code("POLICY_DENIED"),
+    );
+  }
+});
+test("read content budget excludes JSON and base64 overhead", async () => {
+  for (const encoding of ["utf8", "base64"]) {
+    const b = new FakeBackend();
+    b.run = async () => ({
+      terminated: true,
+      data: {
+        encoding,
+        content:
+          encoding === "utf8"
+            ? '"'.repeat(32)
+            : Buffer.alloc(32, 1).toString("base64"),
+        eof: true,
+      },
+    });
+    const { broker, request } = await fixture(b);
+    const result = await broker.execute({
+      ...request,
+      operation: {
+        ...request.operation,
+        encoding,
+        length: 32,
+        maxOutputBytes: 32,
+      },
+    });
+    assert.equal(result.outcome, "success");
+    assert.equal(result.truncated, false);
+  }
+});
+test("read content over decoded byte budget fails without truncating JSON", async () => {
+  const b = new FakeBackend();
+  b.run = async () => ({
+    terminated: true,
+    data: {
+      encoding: "base64",
+      content: Buffer.alloc(33).toString("base64"),
+      eof: true,
+    },
+  });
+  const { broker, request } = await fixture(b);
+  const result = await broker.execute({
+    ...request,
+    operation: { ...request.operation, length: 32, maxOutputBytes: 32 },
+  });
+  assert.equal(result.error.code, "OUTPUT_LIMIT");
+  assert.equal(result.data, undefined);
+});
+
+test("file operation errors require confirmed termination; unknown failures remain blocked", async () => {
+  for (const [code, terminated, expected, state] of [
+    ["FILE_OPERATION_FAILED", true, "FILE_OPERATION_FAILED", "SESSION_ACTIVE"],
+    ["FILE_OPERATION_FAILED", false, "CLEANUP_UNCONFIRMED", "BLOCKED"],
+    ["UNRECOGNIZED_WORKER_ERROR", true, "BROKER_LOST", "BLOCKED"],
+  ]) {
+    const { backend, broker, request } = await fixture();
+    backend.run = async () => ({ terminated, error: { code } });
+    const result = await broker.execute(request);
+    assert.equal(result.error.code, expected);
+    assert.equal(result.outcome, state === "BLOCKED" ? "unknown" : "error");
+    assert.equal(broker.getStatus().state, state);
+  }
+});
