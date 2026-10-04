@@ -116,3 +116,11 @@ for its existing handle identity query. Directory guards, no-reparse opening,
 no-delete sharing and exact volume/file-index equality remain mandatory. Static
 phase/numeric-error diagnostics replace the previously ambiguous query failures;
 no account ACL or privilege grant is added.
+
+## Headless startup diagnostics
+
+The one-shot dedicated helper adds only SEM_FAILCRITICALERRORS to its inherited
+process error mode, preserving existing bits and WER/security behavior. Fixed
+Python progress lines and exact-output contracts distinguish partial progress from
+successful completion. Deadline, token/desktop/ACL isolation and cleanup controls
+remain unchanged; the measured timeout cause is not presumed.

@@ -114,3 +114,19 @@ fn cross_account_admission_is_query_only_and_cannot_launch_directly() {
     assert!(helper.contains("token::create_strict_write_token_from("));
     assert!(helper.contains("process::run_restricted_with_parent("));
 }
+
+#[test]
+fn critical_error_mode_is_confined_to_dedicated_helper() {
+    let (owner, helper) = BROKER.split_once("pub fn helper_main(").unwrap();
+    assert!(!owner.contains("SetErrorMode("));
+    assert!(helper.contains("SetErrorMode(GetErrorMode() | SEM_FAILCRITICALERRORS)"));
+    assert!(
+        helper.find("SetErrorMode(").unwrap()
+            < helper.find("process::run_restricted_with_parent(").unwrap()
+    );
+    assert!(!BROKER.contains("SEM_NOALIGNMENTFAULTEXCEPT"));
+    assert!(!BROKER.contains("SEM_NOGPFAULTERRORBOX"));
+    assert!(!PROCESS.contains("CREATE_DEFAULT_ERROR_MODE"));
+    assert!(PROCESS.contains("CREATE_NO_WINDOW"));
+    assert!(PROCESS.contains("Duration::from_millis(request.timeout_ms.into())"));
+}

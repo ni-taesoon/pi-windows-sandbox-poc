@@ -100,3 +100,24 @@ fn only_observed_unused_root_alias_can_be_excluded() {
     assert!(STAGER.contains("excludedRuntimeEntries=@($selection.skippedRuntimeEntries)"));
     assert!(DRIVER.contains(r#"runtime\python.exe"#));
 }
+
+#[test]
+fn fixed_python_progress_markers_preserve_bounded_fixture() {
+    assert!(DRIVER.contains("PI_LAB_SCRIPT_ENTERED"));
+    assert!(DRIVER.contains("PI_LAB_IMPORTS_READY"));
+    let fixture = DRIVER
+        .split("const SCRIPT: &str =")
+        .nth(1)
+        .unwrap()
+        .split("const OUTPUT:")
+        .next()
+        .unwrap();
+    assert!(
+        fixture.find("PI_LAB_SCRIPT_ENTERED").unwrap()
+            < fixture.find("import pathlib, time").unwrap()
+    );
+    assert!(fixture.find("PI_LAB_IMPORTS_READY").unwrap() < fixture.find("p.write_bytes").unwrap());
+    assert!(fixture.contains("flush=True"));
+    assert!(DRIVER.contains("timeout_ms: 15000"));
+    assert!(DRIVER.contains("exitCodeHex"));
+}
