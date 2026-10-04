@@ -121,3 +121,35 @@ fn fixed_python_progress_markers_preserve_bounded_fixture() {
     assert!(DRIVER.contains("timeout_ms: 15000"));
     assert!(DRIVER.contains("exitCodeHex"));
 }
+
+#[test]
+fn observer_failures_cannot_erase_broker_diagnostics_or_become_success() {
+    let completed = DRIVER
+        .split("done.store(true, Ordering::SeqCst)")
+        .nth(1)
+        .unwrap();
+    let write = completed.find("trusted\\run-evidence.json").unwrap();
+    let reject = completed
+        .find("if let Some(error) = observer_error")
+        .unwrap();
+    let result = completed.find("let result = launched?").unwrap();
+    assert!(write < reject && reject < result);
+    assert!(completed.contains("observerError"));
+    assert!(completed.contains("exitCodeHex"));
+    assert!(!completed[..write].contains("observed?"));
+    assert!(!completed[..write].contains("map_err(|_| anyhow::anyhow!(\"observer panicked\"))?"));
+    let diagnostic = DRIVER
+        .split("unsafe fn observer_api(")
+        .nth(1)
+        .unwrap()
+        .split("fn observe(")
+        .next()
+        .unwrap();
+    assert!(
+        diagnostic.find("last_os_error()").unwrap()
+            < diagnostic.find("WaitForSingleObject").unwrap()
+    );
+    assert!(diagnostic.contains("process.raw(), 0"));
+    assert!(!diagnostic.contains("OpenProcess"));
+    assert!(diagnostic.contains("retained_handle_wait"));
+}

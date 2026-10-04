@@ -124,3 +124,10 @@ process error mode, preserving existing bits and WER/security behavior. Fixed
 Python progress lines and exact-output contracts distinguish partial progress from
 successful completion. Deadline, token/desktop/ACL isolation and cleanup controls
 remain unchanged; the measured timeout cause is not presumed.
+
+## Observer failure evidence preservation
+
+The lab driver persists broker outcomes before propagating observer failures,
+including static API/error/wait diagnostics and prior completed samples where
+available. Observer errors still reject success; retained-handle wait state never
+substitutes for image identity. No launch policy or permission changes are added.
