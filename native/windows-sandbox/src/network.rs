@@ -18,3 +18,19 @@ pub(crate) fn install_offline_protection(account: &str, sid: &str) -> Result<usi
     // WFP failure propagates; caller must never activate the account on error.
     wfp::install_wfp_filters_for_account(account)
 }
+
+/// Read-only configuration preflight; does not substitute for traffic tests.
+pub fn verify_offline_protection(account: &str, sid: &str) -> Result<()> {
+    ensure!(
+        account == format!(".\\{}", crate::setup::OFFLINE_ACCOUNT),
+        "non-product account"
+    );
+    firewall::verify_offline_network_blocks(sid)?;
+    wfp::verify_wfp_filters_for_account(account)
+}
+
+/// Read-only collision check, intended before fresh disposable-lab setup.
+pub fn require_product_namespace_absent() -> Result<()> {
+    firewall::require_namespace_absent()?;
+    wfp::require_namespace_absent()
+}

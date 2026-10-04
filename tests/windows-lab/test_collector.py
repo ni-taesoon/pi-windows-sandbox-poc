@@ -38,6 +38,14 @@ class CollectorTests(unittest.TestCase):
         self.assertTrue(all(t["status"] == "NOT_RUN" for t in report["tests"]))
         self.assertTrue(report["source"]["allListedFilesMatch"])
 
+    def test_crlf_gate_declaration_preserves_raw_hash(self):
+        self.gate.write_bytes(b"pub const NATIVE_VALIDATED: bool = false;\r\n")
+        self.freeze()
+        report = c.collect(self.root)
+        self.assertTrue(report["source"]["allListedFilesMatch"])
+        self.assertTrue(report["source"]["nativeFalseDeclarationObserved"])
+        self.assertEqual(report["status"], "BLOCKED")
+
     def test_changed_source_is_recorded(self):
         self.gate.write_text("pub const NATIVE_VALIDATED: bool = true;\n")
         report = c.collect(self.root)

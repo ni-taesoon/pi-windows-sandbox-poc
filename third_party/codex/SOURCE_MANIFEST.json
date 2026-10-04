@@ -69,7 +69,7 @@
       "destination": "native/windows-sandbox/src/network.rs",
       "upstream": [],
       "origin": "new product integration source",
-      "adapted_sha256": "f114e640abc1e0a75b2402434b1c58d8395a4a3cba493bd0a1a6135cfb80dee7"
+      "adapted_sha256": "731f7ebc9179e5ddba4a4e4b6ea3dd67a1446f760be4b016bc0fb98c38343007"
     },
     {
       "destination": "native/windows-sandbox/src/network/firewall.rs",
@@ -79,7 +79,7 @@
           "sha256": "798143ed6115dadd36ba35cc3edf6beb94def870269e954a8a01dc74a3c23306"
         }
       ],
-      "adapted_sha256": "dd5e06f6d3e687f3f605a8c1defc1456b1d7efba49f3e62ed5e278b65584dd39"
+      "adapted_sha256": "7efcc35f34f94a2b0e8ff107c197966fb604725d4c458465f2bb048b9809e7c1"
     },
     {
       "destination": "native/windows-sandbox/src/network/wfp.rs",
@@ -89,7 +89,7 @@
           "sha256": "82effcda9c951ad62d1f1b4afa9b4f0ad59b3d35d7c2feab53a9b6838dd93fc4"
         }
       ],
-      "adapted_sha256": "33d5c9110f838ffaa41b8ca62b6c7d1497d6d22ed4acfd1b722f4f152d856418"
+      "adapted_sha256": "7e065ce28dce7ec6d0b1e749216d2ff5499b6cfd481ddb8a50f76aff7403decc"
     },
     {
       "destination": "native/windows-sandbox/src/network/wfp/filter_specs.rs",

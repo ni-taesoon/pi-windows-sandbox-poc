@@ -1,0 +1,3 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running `native/windows-sandbox/target/debug/examples/python_lab run`
+LAB_FAILED: BLOCKED: this lab requires disposable Windows

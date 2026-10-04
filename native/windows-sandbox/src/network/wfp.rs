@@ -454,3 +454,116 @@ mod tests {
         assert_eq!(names.len(), FILTER_SPECS.len());
     }
 }
+
+/// Fresh lab provisioning must not adopt or replace an existing product namespace.
+pub fn require_namespace_absent() -> Result<()> {
+    use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::*;
+    let engine = Engine::open(1000)?;
+    unsafe {
+        let mut provider = null_mut();
+        let code = FwpmProviderGetByKey0(engine.handle, &PROVIDER_KEY, &mut provider);
+        if !provider.is_null() {
+            FwpmFreeMemory0((&mut provider as *mut *mut FWPM_PROVIDER0).cast());
+        }
+        anyhow::ensure!(
+            code == FWP_E_PROVIDER_NOT_FOUND as u32,
+            "existing or unreadable Pi WFP provider: {code}"
+        );
+        let mut sublayer = null_mut();
+        let code = FwpmSubLayerGetByKey0(engine.handle, &SUBLAYER_KEY, &mut sublayer);
+        if !sublayer.is_null() {
+            FwpmFreeMemory0((&mut sublayer as *mut *mut FWPM_SUBLAYER0).cast());
+        }
+        anyhow::ensure!(
+            code == FWP_E_SUBLAYER_NOT_FOUND as u32,
+            "existing or unreadable Pi WFP sublayer: {code}"
+        );
+        for spec in FILTER_SPECS {
+            let mut filter = null_mut();
+            let code = FwpmFilterGetByKey0(engine.handle, &spec.key, &mut filter);
+            if !filter.is_null() {
+                FwpmFreeMemory0((&mut filter as *mut *mut FWPM_FILTER0).cast());
+            }
+            anyhow::ensure!(
+                code == FWP_E_FILTER_NOT_FOUND as u32,
+                "existing or unreadable Pi WFP filter: {code}"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn same_guid(a: &GUID, b: &GUID) -> bool {
+    a.data1 == b.data1 && a.data2 == b.data2 && a.data3 == b.data3 && a.data4 == b.data4
+}
+
+/// Strict read-only inspection of installed filters against compiled specifications.
+/// Exact descriptor equality is intentionally conservative (normalization may refuse).
+pub fn verify_wfp_filters_for_account(account: &str) -> Result<()> {
+    use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::*;
+    let engine = Engine::open(1000)?;
+    let user = UserMatchCondition::for_account(account)?;
+    for spec in FILTER_SPECS {
+        unsafe {
+            let mut raw = null_mut();
+            ensure_success(
+                FwpmFilterGetByKey0(engine.handle, &spec.key, &mut raw),
+                "read WFP filter",
+            )?;
+            let checked = (|| -> Result<()> {
+                anyhow::ensure!(!raw.is_null(), "null WFP filter");
+                let f = &*raw;
+                anyhow::ensure!(
+                    same_guid(&f.filterKey, &spec.key)
+                        && same_guid(&f.layerKey, &spec.layer_key)
+                        && same_guid(&f.subLayerKey, &SUBLAYER_KEY)
+                        && !f.providerKey.is_null()
+                        && same_guid(&*f.providerKey, &PROVIDER_KEY),
+                    "WFP filter identity mismatch"
+                );
+                anyhow::ensure!(
+                    f.flags == FWPM_FILTER_FLAG_PERSISTENT
+                        && f.action.r#type == FWP_ACTION_BLOCK
+                        && f.numFilterConditions as usize == spec.conditions.len()
+                        && !f.filterCondition.is_null(),
+                    "WFP filter scope mismatch"
+                );
+                let expected = build_conditions(spec.conditions, &user);
+                for (actual, expected) in
+                    std::slice::from_raw_parts(f.filterCondition, f.numFilterConditions as usize)
+                        .iter()
+                        .zip(&expected)
+                {
+                    anyhow::ensure!(
+                        same_guid(&actual.fieldKey, &expected.fieldKey)
+                            && actual.matchType == expected.matchType
+                            && actual.conditionValue.r#type == expected.conditionValue.r#type,
+                        "WFP condition mismatch"
+                    );
+                    let a = actual.conditionValue.Anonymous;
+                    let e = expected.conditionValue.Anonymous;
+                    let matches = match actual.conditionValue.r#type {
+                        FWP_UINT8 => a.uint8 == e.uint8,
+                        FWP_UINT16 => a.uint16 == e.uint16,
+                        FWP_SECURITY_DESCRIPTOR_TYPE => {
+                            !a.sd.is_null()
+                                && !(*a.sd).data.is_null()
+                                && (*a.sd).size == (*e.sd).size
+                                && std::slice::from_raw_parts((*a.sd).data, (*a.sd).size as usize)
+                                    == std::slice::from_raw_parts(
+                                        (*e.sd).data,
+                                        (*e.sd).size as usize,
+                                    )
+                        }
+                        _ => false,
+                    };
+                    anyhow::ensure!(matches, "WFP condition value mismatch");
+                }
+                Ok(())
+            })();
+            FwpmFreeMemory0((&mut raw as *mut *mut FWPM_FILTER0).cast());
+            checked?;
+        }
+    }
+    Ok(())
+}

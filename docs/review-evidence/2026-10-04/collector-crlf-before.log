@@ -1,0 +1,13 @@
+..F................
+======================================================================
+FAIL: test_crlf_gate_declaration_preserves_raw_hash (test_collector.CollectorTests.test_crlf_gate_declaration_preserves_raw_hash)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "<workspace>/pi-windows-sandbox-poc/tests/windows-lab/test_collector.py", line 46, in test_crlf_gate_declaration_preserves_raw_hash
+    self.assertTrue(report["source"]["nativeFalseDeclarationObserved"])
+AssertionError: False is not true
+
+----------------------------------------------------------------------
+Ran 19 tests in 0.062s
+
+FAILED (failures=1)

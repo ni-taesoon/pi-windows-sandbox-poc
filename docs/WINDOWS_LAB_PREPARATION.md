@@ -1,6 +1,9 @@
 # Disposable Windows lab preparation
 
-Status: **preparation only; native execution blocked.** No Windows tests have run.
+Status: **this collector is preparation only; no Windows execution is attested.**
+A separate fixed Python lab driver and manual workflow have since been implemented
+and code-reviewed; see [WINDOWS_PYTHON_LAB.md](WINDOWS_PYTHON_LAB.md). Their Windows
+execution remains pending explicit security-change approval and a manual run.
 The production `NATIVE_VALIDATED=false` and public `run` rejection must remain unchanged.
 This package does not add a validation override, driver, installer, elevation flow,
 policy mutation, process launcher or network client.
@@ -63,9 +66,10 @@ If any prerequisite is unavailable, record BLOCKED or INCONCLUSIVE as appropriat
 never manufacture PASS from skipped work. An approval ID is evidence to be checked
 by the operator, never a credential or an automated permission bypass.
 
-## Smallest future native launch path (not implemented here)
+## Original preparation design (superseded by the fixed lab driver)
 
-After source freeze/review, build a **separate lab-only Rust driver crate** outside the
+The follow-on fixed driver now implements the narrow Python-smoke portion of this
+design as an example outside the
 production command. It must have a locked path dependency on the exact native crate,
 fixed reviewed policy/fixture inputs, independent observer instrumentation and no
 arbitrary command passthrough. Keep setup and run as separate operator actions.
@@ -182,3 +186,5 @@ missing evidence and non-execution. [Test log](review-evidence/2026-10-04/lab-pr
 After integration, the source collector was rerun against the refreshed manifest;
 all listed hashes matched. Its outcome remains BLOCKED and all eight cases NOT_RUN.
 This validates collection logic only, not the Windows system or any sandbox boundary.
+
+The follow-on collector CRLF regression brings its local fixture/schema suite to **19 passing tests**. Byte hashing remains exact; only declaration line-ending recognition changed.

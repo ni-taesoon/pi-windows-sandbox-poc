@@ -25,7 +25,7 @@ CASES = {
 BLOCKERS = [
     "Disposable Windows VM, OS build, security/GPO inventory and recovery snapshot not verified.",
     "Specific account, protected credential store, ACL, firewall/WFP, activation and recovery changes require approval.",
-    "Separate trusted lab driver and independent process/file/network observer are not implemented or reviewed.",
+    "The fixed Python lab driver and OS observer still require approved Windows execution; broader process/file/network validation is unverified.",
     "Controlled endpoint and explicit network-probe authorization are not verified.",
     "Windows build provenance, effective offline controls and helper/path integrity require native verification.",
 ]
@@ -90,7 +90,7 @@ def source_identity(root):
     if gate_path.casefold() not in seen:
         raise ValueError("Source manifest omits native gate source")
     gate = read_regular(root / gate_path).decode("utf-8")
-    gate_seen = bool(re.search(r"^pub const NATIVE_VALIDATED: bool = false;$", gate, re.M))
+    gate_seen = "pub const NATIVE_VALIDATED: bool = false;" in gate.splitlines()
     return dict(manifestSha256=digest(raw), allListedFilesMatch=all(e["matches"] for e in entries),
                 nativeFalseDeclarationObserved=gate_seen, files=entries,
                 limitation="Listed file hashes and source declaration only; no completeness, build correspondence, runtime enforcement or authorization attestation.")

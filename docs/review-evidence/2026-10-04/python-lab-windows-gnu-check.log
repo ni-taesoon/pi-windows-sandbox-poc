@@ -1,0 +1,55 @@
+warning: function `grant_read_execute_aces` is never used
+   --> src/acl.rs:648:22
+    |
+648 | pub(crate) unsafe fn grant_read_execute_aces(
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `remove_wfp_filters` is never used
+   --> src/network/wfp.rs:107:15
+    |
+107 | pub(crate) fn remove_wfp_filters() -> Result<()> {
+    |               ^^^^^^^^^^^^^^^^^^
+
+warning: constant `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE` is never used
+  --> src/proc_thread_attr.rs:16:7
+   |
+16 | const PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE: usize = 0x0002_0016;
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: field `desktop_app_policy` is never read
+  --> src/proc_thread_attr.rs:22:5
+   |
+18 | pub struct ProcThreadAttributeList {
+   |            ----------------------- field in this struct
+...
+22 |     desktop_app_policy: Option<Box<u32>>,
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: methods `set_pseudoconsole` and `preserve_desktop_app_context` are never used
+  --> src/proc_thread_attr.rs:56:12
+   |
+25 | impl ProcThreadAttributeList {
+   | ---------------------------- methods in this implementation
+...
+56 |     pub fn set_pseudoconsole(&mut self, hpc: isize) -> io::Result<()> {
+   |            ^^^^^^^^^^^^^^^^^
+...
+89 |     pub fn preserve_desktop_app_context(&mut self) -> io::Result<()> {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: variant `OpenOrCreate` is never constructed
+  --> src/setup/no_reparse_dir.rs:80:5
+   |
+78 | pub enum DirectoryOpenDisposition {
+   |          ------------------------ variant in this enum
+79 |     OpenExisting,
+80 |     OpenOrCreate,
+   |     ^^^^^^^^^^^^
+   |
+   = note: `DirectoryOpenDisposition` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: `pi-windows-sandbox` (lib) generated 6 warnings
+    Checking pi-windows-sandbox v0.1.0 (<workspace>/pi-windows-sandbox-poc/native/windows-sandbox)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.13s

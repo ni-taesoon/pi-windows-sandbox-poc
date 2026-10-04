@@ -94,6 +94,13 @@ impl Drop for FirewallComApartment {
 }
 
 pub fn ensure_offline_network_blocks(offline_sid: &str, log: &mut dyn Write) -> Result<()> {
+    offline_network_blocks(offline_sid, log, true)
+}
+/// Read-only effective policy/rule inspection. Never creates or repairs a rule.
+pub fn verify_offline_network_blocks(offline_sid: &str) -> Result<()> {
+    offline_network_blocks(offline_sid, &mut std::io::sink(), false)
+}
+fn offline_network_blocks(offline_sid: &str, log: &mut dyn Write, install: bool) -> Result<()> {
     let local_user_spec = format!("O:LSD:(A;;CC;;;{offline_sid})");
 
     let _apartment = FirewallComApartment::initialize()?;
@@ -127,7 +134,7 @@ pub fn ensure_offline_network_blocks(offline_sid: &str, log: &mut dyn Write) -> 
                     NET_FW_IP_PROTOCOL_UDP.0,
                 ),
             ] {
-                ensure_block_rule(
+                check_or_install_block_rule(
                     &rules,
                     &BlockRuleSpec {
                         internal_name: name,
@@ -139,12 +146,13 @@ pub fn ensure_offline_network_blocks(offline_sid: &str, log: &mut dyn Write) -> 
                         remote_ports: None,
                     },
                     log,
+                    install,
                 )?;
             }
 
             // Pi offline mode has no local-binding exception: prevent a host
             // peer from reaching a sandbox listener over loopback as well.
-            ensure_block_rule(
+            check_or_install_block_rule(
                 &rules,
                 &BlockRuleSpec {
                     internal_name: "pi_sandbox_offline_block_loopback_inbound",
@@ -156,10 +164,11 @@ pub fn ensure_offline_network_blocks(offline_sid: &str, log: &mut dyn Write) -> 
                     remote_ports: None,
                 },
                 log,
+                install,
             )?;
 
             // Block all outbound IP protocols for this user.
-            ensure_block_rule(
+            check_or_install_block_rule(
                 &rules,
                 &BlockRuleSpec {
                     internal_name: OFFLINE_BLOCK_RULE_NAME,
@@ -171,8 +180,9 @@ pub fn ensure_offline_network_blocks(offline_sid: &str, log: &mut dyn Write) -> 
                     remote_ports: None,
                 },
                 log,
+                install,
             )?;
-            ensure_block_rule(
+            check_or_install_block_rule(
                 &rules,
                 &BlockRuleSpec {
                     internal_name: OFFLINE_BLOCK_INBOUND_RULE_NAME,
@@ -184,6 +194,7 @@ pub fn ensure_offline_network_blocks(offline_sid: &str, log: &mut dyn Write) -> 
                     remote_ports: None,
                 },
                 log,
+                install,
             )?;
             Ok(())
         })()
@@ -249,6 +260,19 @@ fn validate_local_policy_modify_result(
             "local firewall policy modifications will not take effect: LocalPolicyModifyState={modify_state:?}"
         ),
     )))
+}
+
+fn check_or_install_block_rule(
+    rules: &INetFwRules,
+    spec: &BlockRuleSpec<'_>,
+    log: &mut dyn Write,
+    install: bool,
+) -> Result<()> {
+    if install {
+        return ensure_block_rule(rules, spec, log);
+    }
+    let rule: INetFwRule3 = unsafe { rules.Item(&BSTR::from(spec.internal_name))? }.cast()?;
+    verify_rule(&rule, spec)
 }
 
 fn ensure_block_rule(
@@ -508,4 +532,29 @@ mod tests {
             validate_local_policy_modify_result(S_OK, NET_FW_MODIFY_STATE_GP_OVERRIDE).is_err()
         );
     }
+}
+
+pub fn require_namespace_absent() -> Result<()> {
+    let _apartment = FirewallComApartment::initialize()?;
+    unsafe {
+        let policy: INetFwPolicy2 = CoCreateInstance(&NetFwPolicy2, None, CLSCTX_INPROC_SERVER)?;
+        ensure_local_policy_rules_take_effect(&policy)?;
+        let rules = policy.Rules()?;
+        for name in [
+            OFFLINE_BLOCK_RULE_NAME,
+            OFFLINE_BLOCK_INBOUND_RULE_NAME,
+            OFFLINE_BLOCK_LOOPBACK_TCP_RULE_NAME,
+            OFFLINE_BLOCK_LOOPBACK_UDP_RULE_NAME,
+            "pi_sandbox_offline_block_loopback_inbound",
+        ] {
+            match rules.Item(&BSTR::from(name)) {
+                Ok(_) => anyhow::bail!("existing Pi firewall rule: {name}"),
+                Err(error) => anyhow::ensure!(
+                    error.code().0 as u32 == 0x80070002,
+                    "cannot inspect firewall namespace: {error}"
+                ),
+            }
+        }
+    }
+    Ok(())
 }
