@@ -20,6 +20,8 @@ pub mod process;
 #[cfg(windows)]
 pub mod setup;
 #[cfg(windows)]
+mod startup_diagnostics;
+#[cfg(windows)]
 pub mod token;
 #[cfg(windows)]
 mod token_user;

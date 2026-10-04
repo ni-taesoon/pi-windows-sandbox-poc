@@ -41,7 +41,7 @@
           "sha256": "2630fa3d2d033005343448b13981516bf7b0f72457bb5eb6abb0cde09592c4e2"
         }
       ],
-      "adapted_sha256": "5312b3404fcf8a1206b2786dd66ced308c26c0dead583950f83aefa7d66601a8"
+      "adapted_sha256": "43d613142d0f831b3c084d998a5995f086e7b6072855dfa717c7d341d0a8dd0d"
     },
     {
       "destination": "native/windows-sandbox/src/desktop.rs",
@@ -57,7 +57,7 @@
       "destination": "native/windows-sandbox/src/lib.rs",
       "upstream": [],
       "origin": "new product integration source",
-      "adapted_sha256": "0e4a48d7dd3aacf5f6a7cac4409448f8f302b6249b3b8c12729313ba5f0943f0"
+      "adapted_sha256": "24f7e620b0a20016d07fdfbe4b6b6eb8aad358cf43c6d14fb957b1837d1f9b74"
     },
     {
       "destination": "native/windows-sandbox/src/main.rs",
@@ -266,6 +266,12 @@
         }
       ],
       "adapted_sha256": "2aa412d89bb7ff813861c1dc5a7f2374b80af43e6c8c365156b58428ae3f8d9f"
+    },
+    {
+      "destination": "native/windows-sandbox/src/startup_diagnostics.rs",
+      "upstream": [],
+      "origin": "new product integration source",
+      "adapted_sha256": "4d435a7b71248569bb044ef0d9209a83a0041406d520441fcd2f2af11edf7bb0"
     }
   ]
 }

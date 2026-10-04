@@ -131,3 +131,13 @@ The lab driver persists broker outcomes before propagating observer failures,
 including static API/error/wait diagnostics and prior completed samples where
 available. Observer errors still reject success; retained-handle wait state never
 substitutes for image identity. No launch policy or permission changes are added.
+
+## Read-only startup access diagnostics
+
+A new product-owned helper diagnostic compares base/restricted token access to the
+actual expected window station and existing private desktop, with documented
+object generic mappings and bounded descriptor reads. Only whitelisted masks,
+booleans and error stages leave the helper; no descriptor or identity is emitted.
+It makes no ACL, token, desktop-association or privilege changes and provides no
+new launch authority. The internal helper frame adds diagnostics before the result
+under the original response deadline.
