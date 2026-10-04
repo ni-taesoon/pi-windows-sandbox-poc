@@ -57,10 +57,10 @@ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_SECURIT
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_UINT16;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_UINT8;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_VALUE0;
-use windows_sys::Win32::Security::Authorization::BuildExplicitAccessWithNameW;
 use windows_sys::Win32::Security::Authorization::BuildSecurityDescriptorW;
 use windows_sys::Win32::Security::Authorization::EXPLICIT_ACCESS_W;
 use windows_sys::Win32::Security::Authorization::GRANT_ACCESS;
+use windows_sys::Win32::Security::Authorization::{TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W};
 use windows_sys::Win32::Security::PSECURITY_DESCRIPTOR;
 use windows_sys::Win32::System::Rpc::RPC_C_AUTHN_DEFAULT;
 use windows_sys::Win32::System::Threading::INFINITE;
@@ -81,18 +81,18 @@ const SUBLAYER_DESCRIPTION: &str = "Persistent WFP sublayer for Pi Windows sandb
 const PROVIDER_KEY: GUID = GUID::from_u128(0xfdf5f7962e035500b81b83e9e8b69f8d);
 const SUBLAYER_KEY: GUID = GUID::from_u128(0xa112309bf79e58a7bf97348979bad2fb);
 
-/// Installs the persistent Pi WFP filters for `account`.
+/// Installs the persistent Pi WFP filters for the validated local account SID.
 ///
 /// This is intended to run from the already-elevated setup helper. Callers
 /// may continue ordinary setup after an error, but must restore these filters
 /// before re-enabling accounts left disabled by interrupted cleanup.
-pub fn install_wfp_filters_for_account(account: &str) -> Result<usize> {
+pub fn install_wfp_filters_for_sid(sid: &str) -> Result<usize> {
     let engine = Engine::open(INFINITE)?;
     let mut transaction = engine.begin_transaction()?;
     ensure_provider(engine.handle)?;
     ensure_sublayer(engine.handle)?;
 
-    let user_condition = UserMatchCondition::for_account(account)?;
+    let user_condition = UserMatchCondition::for_sid(sid)?;
     let mut installed_filter_count = 0;
     for spec in FILTER_SPECS {
         delete_filter_if_present(engine.handle, &spec.key)?;
@@ -207,18 +207,20 @@ struct UserMatchCondition {
 }
 
 impl UserMatchCondition {
-    fn for_account(account: &str) -> Result<Self> {
-        let account_w = to_wide(OsStr::new(account));
-        let mut access: EXPLICIT_ACCESS_W = unsafe { zeroed() };
-        unsafe {
-            BuildExplicitAccessWithNameW(
-                &mut access,
-                account_w.as_ptr(),
-                FWP_ACTRL_MATCH_FILTER,
-                GRANT_ACCESS,
-                0,
-            );
-        }
+    fn for_sid(sid: &str) -> Result<Self> {
+        let account_sid = crate::token::LocalSid::from_string(sid)?;
+        let access = EXPLICIT_ACCESS_W {
+            grfAccessPermissions: FWP_ACTRL_MATCH_FILTER,
+            grfAccessMode: GRANT_ACCESS,
+            grfInheritance: 0,
+            Trustee: TRUSTEE_W {
+                pMultipleTrustee: null_mut(),
+                MultipleTrusteeOperation: 0,
+                TrusteeForm: TRUSTEE_IS_SID,
+                TrusteeType: TRUSTEE_IS_USER,
+                ptstrName: account_sid.as_ptr().cast(),
+            },
+        };
 
         let mut security_descriptor: PSECURITY_DESCRIPTOR = null_mut();
         let mut security_descriptor_len = 0;
@@ -499,10 +501,10 @@ fn same_guid(a: &GUID, b: &GUID) -> bool {
 
 /// Strict read-only inspection of installed filters against compiled specifications.
 /// Exact descriptor equality is intentionally conservative (normalization may refuse).
-pub fn verify_wfp_filters_for_account(account: &str) -> Result<()> {
+pub fn verify_wfp_filters_for_sid(sid: &str) -> Result<()> {
     use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::*;
     let engine = Engine::open(1000)?;
-    let user = UserMatchCondition::for_account(account)?;
+    let user = UserMatchCondition::for_sid(sid)?;
     for spec in FILTER_SPECS {
         unsafe {
             let mut raw = null_mut();

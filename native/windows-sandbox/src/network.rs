@@ -6,27 +6,27 @@ mod wfp;
 
 use anyhow::{ensure, Result};
 
-pub(crate) fn install_offline_protection(account: &str, sid: &str) -> Result<usize> {
+pub(crate) fn install_offline_protection(sid: &str) -> Result<usize> {
     ensure!(
-        account == format!(".\\{}", crate::setup::OFFLINE_ACCOUNT),
+        sid == crate::setup::local_offline_account_sid()?,
         "refusing non-product account"
     );
-    // The SID comes from LookupAccountNameW after creating our disabled account.
+    // The fixed local SAM identity is re-read; no account-name lookup is used.
     ensure!(sid.starts_with("S-1-5-21-"), "expected a local account SID");
     let mut log = std::io::sink();
     firewall::ensure_offline_network_blocks(sid, &mut log)?;
     // WFP failure propagates; caller must never activate the account on error.
-    wfp::install_wfp_filters_for_account(account)
+    wfp::install_wfp_filters_for_sid(sid)
 }
 
 /// Read-only configuration preflight; does not substitute for traffic tests.
-pub fn verify_offline_protection(account: &str, sid: &str) -> Result<()> {
+pub fn verify_offline_protection(sid: &str) -> Result<()> {
     ensure!(
-        account == format!(".\\{}", crate::setup::OFFLINE_ACCOUNT),
+        sid == crate::setup::local_offline_account_sid()?,
         "non-product account"
     );
     firewall::verify_offline_network_blocks(sid)?;
-    wfp::verify_wfp_filters_for_account(account)
+    wfp::verify_wfp_filters_for_sid(sid)
 }
 
 /// Read-only collision check, intended before fresh disposable-lab setup.

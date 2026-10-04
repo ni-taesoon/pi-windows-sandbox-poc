@@ -75,3 +75,12 @@ the existing primitives without opening the public run endpoint. Derived firewal
 modules add read-only exact configuration inspection and fresh-namespace checks.
 The Windows ToolHelp feature supports independent process observations.
 Source/contract checks and Windows cross-compilation are not native runtime proof.
+
+## Local SAM identity and rollback correction
+
+After measured Windows error 1332, local account identity uses NetUserGetInfo level23
+instead of ambiguous name lookup. WFP user conditions use an explicit SID trustee.
+Fresh transaction ownership markers and SID/state readback scope recovery; the
+protected ready:false record is flushed before network setup or activation.
+These changes do not protect against a malicious privileged account-replacement
+race and are pending the next actual Windows attempt.

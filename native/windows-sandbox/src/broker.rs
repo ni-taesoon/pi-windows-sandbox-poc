@@ -379,7 +379,7 @@ pub fn helper_main(name: &str, expected_broker: u32) -> Result<()> {
         let parent = duplicate_received_parent_wait_handle(payload.parent_wait_handle)?;
         let base = Handle::from_raw(token::get_current_token_for_restriction()?)?;
         let actual = token::get_user_sid_bytes(base.raw())?;
-        let expected = winutil::resolve_sid(&format!(".\\{}", setup::OFFLINE_ACCOUNT))?;
+        let expected = winutil::sid_bytes_from_string(&setup::local_offline_account_sid()?)?;
         ensure!(actual == expected, "helper is not dedicated Pi account");
         let cap = token::LocalSid::from_string(&payload.capability_sid)?;
         let restricted = Handle::from_raw(token::create_strict_write_token_from(

@@ -8,7 +8,7 @@ pub(crate) mod dpapi;
 pub(crate) mod no_reparse_dir;
 mod store;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use std::ffi::OsStr;
 use std::fmt;
 use std::os::windows::ffi::OsStrExt;
@@ -23,30 +23,50 @@ pub struct PreparedOfflineAccount {
     pub sid: String,
     pub installed_wfp_filter_count: usize,
     pub(crate) encrypted_password: Vec<u8>,
+    ownership: accounts::FreshAccount,
 }
 
 /// Run only from an independently launched, authorized elevated setup process.
 /// Creates a new disabled account; refuses to adopt/reset an existing identity.
-/// On any error after creation, the account remains disabled. No setup marker or
+/// Failure recovery is same-SID/creation-marker bound; inability to verify it is
+/// reported explicitly, never treated as proof that the account is disabled. No setup marker or
 /// launch-ready claim is emitted, and no password is persisted or logged.
 ///
 /// This primitive is source-complete but is intentionally not exposed by the
 /// shipped command-line execution path until Windows validation is complete.
 pub fn prepare_disabled_offline_account() -> Result<PreparedOfflineAccount> {
+    let mut prepared = create_fresh_disabled_identity()?;
+    let installed = crate::network::install_offline_protection(&prepared.sid).and_then(|count| {
+        crate::network::verify_offline_protection(&prepared.sid)?;
+        Ok(count)
+    });
+    match installed {
+        Ok(count)=>{ prepared.installed_wfp_filter_count=count; Ok(prepared) },
+        Err(error)=>match prepared.ownership.rollback() {
+            Ok(())=>Err(error.context("phase=prepare-offline-protection; owned account disable verified")),
+            Err(recovery)=>Err(anyhow::anyhow!("phase=prepare-offline-protection: {error:#}; DISABLE ROLLBACK FAILED: {recovery:#}")),
+        }
+    }
+}
+fn create_fresh_disabled_identity() -> Result<PreparedOfflineAccount> {
     accounts::require_elevated()?;
     let password = accounts::random_password()?;
-    let encrypted_password = dpapi::protect(password.as_bytes())?;
-    accounts::create_disabled_account(OFFLINE_ACCOUNT, &password)?;
-    let local_account = format!(".\\{}", OFFLINE_ACCOUNT);
-    let sid = accounts::account_sid_string(&local_account)?;
-    let installed_wfp_filter_count =
-        crate::network::install_offline_protection(&local_account, &sid)?;
+    let encrypted_password =
+        dpapi::protect(password.as_bytes()).context("phase=protect-generated-password")?;
+    let ownership = accounts::create_disabled_account(OFFLINE_ACCOUNT, &password)
+        .context("phase=create-fresh-disabled-account")?;
     Ok(PreparedOfflineAccount {
         username: OFFLINE_ACCOUNT.to_owned(),
-        sid,
-        installed_wfp_filter_count,
+        sid: ownership.sid.clone(),
+        installed_wfp_filter_count: 0,
         encrypted_password,
+        ownership,
     })
+}
+
+/// Read-only fixed local SAM SID. Does not resolve a domain or adopt an account.
+pub fn local_offline_account_sid() -> Result<String> {
+    Ok(accounts::local_account_state()?.sid)
 }
 
 /// A setup result alone is never a launch capability.
@@ -93,35 +113,56 @@ pub fn provision_offline_account(
     broker_owner_sid: &str,
 ) -> Result<()> {
     accounts::require_elevated()?;
-    let store = store::NewStore::create(store_path, broker_owner_sid)?;
-    let prepared = prepare_disabled_offline_account()?;
+    let store = store::NewStore::create(store_path, broker_owner_sid)
+        .context("phase=create-protected-store")?;
+    let PreparedOfflineAccount {
+        username,
+        sid,
+        encrypted_password,
+        mut ownership,
+        ..
+    } = create_fresh_disabled_identity()?;
     let mut record = store::Record {
         version: 1,
         ready: false,
-        account: prepared.username,
-        account_sid: prepared.sid.clone(),
+        account: username,
+        account_sid: sid.clone(),
         owner_sid: broker_owner_sid.to_owned(),
-        password_dpapi: prepared.encrypted_password,
+        password_dpapi: encrypted_password,
     };
-    let mut credential_file = store.write(&record)?;
     let validation = (|| -> Result<()> {
-        accounts::set_disabled(&prepared.sid, false)?;
+        // Flush an authenticated ready:false record before network work. If that
+        // write itself fails, the still-owned in-memory guard is the authority.
+        let mut credential_file = store
+            .write(&record)
+            .context("phase=flush-disabled-account-store")?;
+        crate::network::install_offline_protection(&sid)
+            .context("phase=install-offline-protection")?;
+        crate::network::verify_offline_protection(&sid)
+            .context("phase=verify-offline-protection-before-activation")?;
+        accounts::set_disabled(&sid, false).context("phase=activate-owned-account")?;
         let plain = zeroize::Zeroizing::new(dpapi::unprotect(&record.password_dpapi)?);
         let password = std::str::from_utf8(&plain)?;
-        let token = accounts::logon(password, &prepared.sid)?;
+        let token = accounts::logon(password, &sid).context("phase=validate-dedicated-logon")?;
         drop(token);
-        store::commit(&mut credential_file, &mut record)?;
+        store::commit(&mut credential_file, &mut record).context("phase=commit-ready-store")?;
         Ok(())
     })();
-    if let Err(error) = validation {
-        return match accounts::set_disabled(&prepared.sid, true) {
-            Ok(()) => Err(error.context("provisioning failed; account disabled")),
-            Err(rollback) => Err(anyhow::anyhow!(
-                "provisioning failed: {error}; DISABLE ROLLBACK FAILED: {rollback}"
-            )),
-        };
+    match validation {
+        Ok(()) => {
+            ownership.disarm();
+            Ok(())
+        }
+        Err(error) => {
+            match ownership.rollback() {
+                Ok(()) => Err(error
+                    .context("provisioning failed; owned account disabled and read-back verified")),
+                Err(recovery) => Err(anyhow::anyhow!(
+                    "provisioning failed: {error:#}; DISABLE ROLLBACK FAILED: {recovery:#}"
+                )),
+            }
+        }
     }
-    Ok(())
 }
 
 /// Read-only broker logon seam. The protected store is authenticated by its
