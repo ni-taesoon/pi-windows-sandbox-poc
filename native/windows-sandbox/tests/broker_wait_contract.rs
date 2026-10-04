@@ -42,3 +42,33 @@ fn handoff_is_wait_only_noninheritable_and_precedes_admission_and_resume() {
         .expect("no handle-based runner");
     assert!(!runner.contains("OpenProcess("));
 }
+
+#[test]
+fn broker_api_errors_have_static_phase_labels_and_numeric_codes() {
+    assert!(BROKER.contains("fn win(api: &'static str, ok: i32)"));
+    assert!(BROKER.contains("api={api}; win32={code}"));
+    for label in [
+        "pipe-sddl/ConvertStringSecurityDescriptorToSecurityDescriptorW",
+        "helper-object-sddl/ConvertStringSecurityDescriptorToSecurityDescriptorW",
+        "pipe-client-identity/GetNamedPipeClientProcessId",
+        "pipe-server-identity/GetNamedPipeServerProcessId",
+        "pipe-read-mode/SetNamedPipeHandleState",
+        "pipe-read-available/PeekNamedPipe",
+        "pipe-read/ReadFile",
+        "parent-wait-transfer/DuplicateHandle",
+        "received-parent-wait-copy/DuplicateHandle",
+        "helper-base-token/OpenProcessToken",
+    ] {
+        assert_eq!(
+            BROKER.matches(label).count(),
+            1,
+            "missing or ambiguous API label"
+        );
+    }
+    assert!(BROKER.contains("broker.phase=suspended-helper-launch"));
+    assert!(BROKER.contains("broker.phase=policy-admission"));
+    let wrapper = &BROKER[BROKER.find("fn win(").unwrap()..BROKER.find("impl Pipe").unwrap()];
+    assert!(!wrapper.contains("owner"));
+    assert!(!wrapper.contains("path"));
+    assert!(!wrapper.contains("request"));
+}

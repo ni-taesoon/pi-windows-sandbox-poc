@@ -32,14 +32,14 @@ struct Pipe {
     handle: Handle,
     name: String,
 }
-fn win(ok: i32) -> Result<()> {
-    ensure!(
-        ok != 0,
-        "native broker API: {}",
-        std::io::Error::last_os_error()
-    );
+fn win(api: &'static str, ok: i32) -> Result<()> {
+    if ok == 0 {
+        let code = std::io::Error::last_os_error().raw_os_error().unwrap_or(-1);
+        anyhow::bail!("native broker API failed: api={api}; win32={code}");
+    }
     Ok(())
 }
+
 impl Pipe {
     fn create(owner: &str, account: &str) -> Result<Self> {
         unsafe {
@@ -61,15 +61,18 @@ impl Pipe {
                     .collect::<String>()
             );
             let mut sd = null_mut();
-            win(ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                winutil::to_wide(format!(
-                    "D:P(A;;GA;;;{owner})(A;;GA;;;{account})(A;;GA;;;SY)"
-                ))
-                .as_ptr(),
-                1,
-                &mut sd,
-                null_mut(),
-            ))?;
+            win(
+                "pipe-sddl/ConvertStringSecurityDescriptorToSecurityDescriptorW",
+                ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                    winutil::to_wide(format!(
+                        "D:P(A;;GA;;;{owner})(A;;GA;;;{account})(A;;GA;;;SY)"
+                    ))
+                    .as_ptr(),
+                    1,
+                    &mut sd,
+                    null_mut(),
+                ),
+            )?;
             let sa = SECURITY_ATTRIBUTES {
                 nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
                 lpSecurityDescriptor: sd,
@@ -108,7 +111,9 @@ impl Pipe {
             std::thread::sleep(Duration::from_millis(5));
         }
         let mut actual = 0;
-        win(unsafe { GetNamedPipeClientProcessId(self.handle.raw(), &mut actual) })?;
+        win("pipe-client-identity/GetNamedPipeClientProcessId", unsafe {
+            GetNamedPipeClientProcessId(self.handle.raw(), &mut actual)
+        })?;
         ensure!(actual == expected, "helper pipe PID mismatch");
         Ok(())
     }
@@ -136,10 +141,14 @@ impl Pipe {
             ))?
         };
         let mut pid = 0;
-        win(unsafe { GetNamedPipeServerProcessId(handle.raw(), &mut pid) })?;
+        win("pipe-server-identity/GetNamedPipeServerProcessId", unsafe {
+            GetNamedPipeServerProcessId(handle.raw(), &mut pid)
+        })?;
         ensure!(pid == expected_broker, "broker pipe PID mismatch");
         let mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
-        win(unsafe { SetNamedPipeHandleState(handle.raw(), &mode, null(), null()) })?;
+        win("pipe-read-mode/SetNamedPipeHandleState", unsafe {
+            SetNamedPipeHandleState(handle.raw(), &mode, null(), null())
+        })?;
         Ok(Self {
             handle,
             name: name.to_owned(),
@@ -177,7 +186,7 @@ impl Pipe {
         while offset < count {
             ensure!(Instant::now() < deadline, "pipe read timeout");
             let mut available = 0;
-            win(unsafe {
+            win("pipe-read-available/PeekNamedPipe", unsafe {
                 PeekNamedPipe(
                     self.handle.raw(),
                     null_mut(),
@@ -192,7 +201,7 @@ impl Pipe {
                 continue;
             }
             let mut read = 0;
-            win(unsafe {
+            win("pipe-read/ReadFile", unsafe {
                 ReadFile(
                     self.handle.raw(),
                     bytes[offset..].as_mut_ptr(),
@@ -222,12 +231,15 @@ unsafe fn protect_helper_object(handle: HANDLE, owner: &str) -> Result<()> {
     let mut sd = null_mut();
     // OWNER RIGHTS removes shared account owner's implicit WRITE_DAC. Only trusted
     // broker/system can mutate helper process/thread; this requires native validation.
-    win(ConvertStringSecurityDescriptorToSecurityDescriptorW(
-        winutil::to_wide(format!("D:P(A;;RC;;;OW)(A;;GA;;;{owner})(A;;GA;;;SY)")).as_ptr(),
-        1,
-        &mut sd,
-        null_mut(),
-    ))?;
+    win(
+        "helper-object-sddl/ConvertStringSecurityDescriptorToSecurityDescriptorW",
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            winutil::to_wide(format!("D:P(A;;RC;;;OW)(A;;GA;;;{owner})(A;;GA;;;SY)")).as_ptr(),
+            1,
+            &mut sd,
+            null_mut(),
+        ),
+    )?;
     let mut present = 0;
     let mut defaulted = 0;
     let mut dacl = null_mut();
@@ -254,15 +266,18 @@ unsafe fn protect_helper_object(handle: HANDLE, owner: &str) -> Result<()> {
 /// in the broker. SuspendedHelper/outer-job cleanup reclaims it on every failure.
 unsafe fn duplicate_parent_wait_handle(helper_process: &Handle) -> Result<u64> {
     let mut remote = 0;
-    win(DuplicateHandle(
-        GetCurrentProcess(),
-        GetCurrentProcess(),
-        helper_process.raw(),
-        &mut remote,
-        SYNCHRONIZE,
-        0, // Not inheritable by the restricted command.
-        0, // Explicit minimal rights, not SAME_ACCESS or CLOSE_SOURCE.
-    ))?;
+    win(
+        "parent-wait-transfer/DuplicateHandle",
+        DuplicateHandle(
+            GetCurrentProcess(),
+            GetCurrentProcess(),
+            helper_process.raw(),
+            &mut remote,
+            SYNCHRONIZE,
+            0, // Not inheritable by the restricted command.
+            0, // Explicit minimal rights, not SAME_ACCESS or CLOSE_SOURCE.
+        ),
+    )?;
     Ok(remote as usize as u64)
 }
 
@@ -279,15 +294,18 @@ unsafe fn duplicate_received_parent_wait_handle(value: u64) -> Result<Handle> {
         "invalid parent wait handle"
     );
     let mut local = 0;
-    win(DuplicateHandle(
-        GetCurrentProcess(),
-        value as HANDLE,
-        GetCurrentProcess(),
-        &mut local,
-        SYNCHRONIZE,
-        0,
-        0, // Never close or take ownership of the received numeric source slot.
-    ))?;
+    win(
+        "received-parent-wait-copy/DuplicateHandle",
+        DuplicateHandle(
+            GetCurrentProcess(),
+            value as HANDLE,
+            GetCurrentProcess(),
+            &mut local,
+            SYNCHRONIZE,
+            0,
+            0, // Never close or take ownership of the received numeric source slot.
+        ),
+    )?;
     Handle::from_raw(local)
 }
 
@@ -309,9 +327,11 @@ pub unsafe fn run_via_dedicated_helper(
     let current = Handle::from_raw(token::get_current_token_for_restriction()?)?;
     let owner = winutil::string_from_sid_bytes(&token::get_user_sid_bytes(current.raw())?)
         .map_err(anyhow::Error::msg)?;
-    let account_lease = crate::admission::acquire_account_lease(&owner)?;
-    let identity = setup::logon_offline_identity(store_path, &owner)?;
-    let pipe = Pipe::create(&owner, identity.sid())?;
+    let account_lease =
+        crate::admission::acquire_account_lease(&owner).context("broker.phase=account-lease")?;
+    let identity = setup::logon_offline_identity(store_path, &owner)
+        .context("broker.phase=dedicated-logon")?;
+    let pipe = Pipe::create(&owner, identity.sid()).context("broker.phase=pipe-create")?;
     let broker_pid = GetCurrentProcessId();
     let args = vec![
         "internal-experimental-helper".into(),
@@ -319,25 +339,34 @@ pub unsafe fn run_via_dedicated_helper(
         broker_pid.to_string(),
     ];
     let helper =
-        setup::launch::launch_suspended_helper(store_path, &owner, helper_exe, &args, None)?;
-    let job = Job::new()?;
-    job.assign_suspended(&helper.process)?;
-    protect_helper_object(helper.process.raw(), &owner)?;
-    protect_helper_object(helper.thread.raw(), &owner)?;
-    let parent_wait_handle = duplicate_parent_wait_handle(&helper.process)?;
+        setup::launch::launch_suspended_helper(store_path, &owner, helper_exe, &args, None)
+            .context("broker.phase=suspended-helper-launch")?;
+    let job = Job::new().context("broker.phase=outer-job-create")?;
+    job.assign_suspended(&helper.process)
+        .context("broker.phase=outer-job-assign")?;
+    protect_helper_object(helper.process.raw(), &owner)
+        .context("broker.phase=helper-process-protection")?;
+    protect_helper_object(helper.thread.raw(), &owner)
+        .context("broker.phase=helper-thread-protection")?;
+    let parent_wait_handle = duplicate_parent_wait_handle(&helper.process)
+        .context("broker.phase=parent-wait-transfer")?;
     let mut base = 0;
-    win(OpenProcessToken(
-        helper.process.raw(),
-        TOKEN_QUERY
-            | TOKEN_DUPLICATE
-            | TOKEN_ASSIGN_PRIMARY
-            | TOKEN_ADJUST_DEFAULT
-            | TOKEN_ADJUST_PRIVILEGES,
-        &mut base,
-    ))?;
+    win(
+        "helper-base-token/OpenProcessToken",
+        OpenProcessToken(
+            helper.process.raw(),
+            TOKEN_QUERY
+                | TOKEN_DUPLICATE
+                | TOKEN_ASSIGN_PRIMARY
+                | TOKEN_ADJUST_DEFAULT
+                | TOKEN_ADJUST_PRIVILEGES,
+            &mut base,
+        ),
+    )?;
     let base = Handle::from_raw(base)?;
     let lease =
-        AdmittedLaunch::prepare_under_lease(&base, &helper.account_sid, request, &account_lease)?;
+        AdmittedLaunch::prepare_under_lease(&base, &helper.account_sid, request, &account_lease)
+            .context("broker.phase=policy-admission")?;
     let payload = lease.helper_payload(parent_wait_handle);
     ensure!(
         ResumeThread(helper.thread.raw()) != u32::MAX,

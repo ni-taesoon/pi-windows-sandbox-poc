@@ -91,3 +91,11 @@ The new product-owned bounded address-set parser compares numeric IPv4/IPv6
 unions exactly for firewall remote addresses. Other selector fields stay exact;
 unknown syntax and unequal sets fail closed. This addresses a measured remote-address
 readback mismatch without assuming its unlogged Windows spelling.
+
+## Broker API diagnostics
+
+Following a measured access-denied broker failure, product broker wrappers report
+constant phase/API labels and numeric Win32 error codes. Desired access masks,
+object security, operation order and fail-closed behavior are unchanged. New
+source-contract coverage checks label completeness; no upstream validation claim
+or additional permission grant is implied.
