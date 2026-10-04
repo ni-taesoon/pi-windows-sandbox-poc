@@ -141,3 +141,10 @@ booleans and error stages leave the helper; no descriptor or identity is emitted
 It makes no ACL, token, desktop-association or privilege changes and provides no
 new launch authority. The internal helper frame adds diagnostics before the result
 under the original response deadline.
+
+## Offline PE and existing-event inspection
+
+New product diagnostic scripts read staged PE import metadata and narrowly bounded
+existing Windows event records after the fixed run. Provider/schema/path/time
+attribution is fail-closed; only sanitized fields are retained. No tracing,
+debugging, baseline workload, privilege or executable behavior changes are made.

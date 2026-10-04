@@ -137,7 +137,12 @@ jobs:
       - name: Execute exactly one fixed Python fixture through dedicated-account broker
         id: run
         run: |
-          ./scripts/stage_windows_python_lab.ps1 -Phase Run -ApprovedDisposableVm 2>&1 | Tee-Object -FilePath lab-evidence/run.log
+          $started = [DateTimeOffset]::UtcNow
+          try {
+            ./scripts/stage_windows_python_lab.ps1 -Phase Run -ApprovedDisposableVm 2>&1 | Tee-Object -FilePath lab-evidence/run.log
+          } finally {
+            @{ start=$started.ToString('o'); end=[DateTimeOffset]::UtcNow.ToString('o') } | ConvertTo-Json | Set-Content -LiteralPath lab-evidence/run-window.json -Encoding UTF8
+          }
       - name: Always attempt owned-account disable after setup attempt
         id: disable
         if: ${{ always() && steps.stage.outcome == 'success' && steps.setup.outcome != 'skipped' }}
@@ -145,6 +150,12 @@ jobs:
           # No deletion, namespace replacement, system ACL changes or host fallback.
           # Authenticated store determines the owned SID. Failure remains a failure.
           ./scripts/stage_windows_python_lab.ps1 -Phase Disable -ApprovedDisposableVm 2>&1 | Tee-Object -FilePath lab-evidence/disable.log
+      - name: Inspect staged PE bytes and existing loader events (read-only)
+        if: ${{ always() && steps.stage.outcome == 'success' && steps.run.outcome != 'skipped' }}
+        run: |
+          python scripts/inspect_windows_loader.py pe | Set-Content -LiteralPath lab-evidence/pe-imports.json -Encoding UTF8
+          if ($LASTEXITCODE -ne 0) { Write-Warning 'PE inventory unavailable; no runtime or security changes attempted.' }
+          ./scripts/collect_windows_loader_events.ps1
       - name: Collect only explicitly allowlisted non-secret evidence
         if: ${{ always() && steps.stage.outcome == 'success' }}
         env:
@@ -190,3 +201,6 @@ jobs:
             lab-evidence/recovery-evidence.json
             lab-evidence/result-evidence.json
             lab-evidence/summary-evidence.json
+            lab-evidence/run-window.json
+            lab-evidence/pe-imports.json
+            lab-evidence/loader-events.json
