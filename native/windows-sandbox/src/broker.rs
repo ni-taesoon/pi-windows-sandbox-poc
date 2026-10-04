@@ -355,11 +355,9 @@ pub unsafe fn run_via_dedicated_helper(
         "helper-base-token/OpenProcessToken",
         OpenProcessToken(
             helper.process.raw(),
-            TOKEN_QUERY
-                | TOKEN_DUPLICATE
-                | TOKEN_ASSIGN_PRIMARY
-                | TOKEN_ADJUST_DEFAULT
-                | TOKEN_ADJUST_PRIVILEGES,
+            // Admission reads this actual helper's SID/logon session only.
+            // The helper creates its own restricted derivative after admission.
+            TOKEN_QUERY,
             &mut base,
         ),
     )?;

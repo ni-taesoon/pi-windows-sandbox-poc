@@ -27,7 +27,7 @@
       "destination": "native/windows-sandbox/src/admission.rs",
       "upstream": [],
       "origin": "new product integration source",
-      "adapted_sha256": "f543dc06bbc9b687b70cd430aa4800f1bfb23694584a8d4cdbf959d10f7a532c"
+      "adapted_sha256": "8191da1354691220c949d12a9adc61a601920f9242154e6666b492104af69df0"
     },
     {
       "destination": "native/windows-sandbox/src/broker.rs",
@@ -41,7 +41,7 @@
           "sha256": "2630fa3d2d033005343448b13981516bf7b0f72457bb5eb6abb0cde09592c4e2"
         }
       ],
-      "adapted_sha256": "6dff82a5345585be62e74a712b61df464e028439c37bb5fcdca2204b5d3f929f"
+      "adapted_sha256": "2f614349fc1b00e438da1bac6941e05b9495e18cf0bf37d6b19f7483b1785d7d"
     },
     {
       "destination": "native/windows-sandbox/src/desktop.rs",

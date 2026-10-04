@@ -41,8 +41,14 @@ pub struct AdmittedLaunch {
     capability: token::LocalSid,
     capability_string: String,
     _account_lease: Option<Handle>,
-    restricted: Handle,
+    restricted: Option<Handle>,
     desktop: PrivateDesktop,
+}
+/// Helper mode admits paths/desktop from the real helper's query-only token.
+/// Only the helper may construct and execute its own restricted derivative.
+enum ExecutionPath {
+    Standalone,
+    DedicatedHelper,
 }
 const SHARE: u32 = FILE_SHARE_READ | FILE_SHARE_WRITE; // Never share deletion.
 const ACCESS: u32 = READ_CONTROL | WRITE_DAC | FILE_READ_ATTRIBUTES | FILE_READ_DATA;
@@ -254,21 +260,31 @@ impl AdmittedLaunch {
             expected_account_sid,
             request,
             Some(acquire_account_lease(&owner)?),
+            ExecutionPath::Standalone,
         )
     }
+    /// Query-only admission for the actual suspended helper. Does not duplicate
+    /// or adjust the cross-account token; the helper restricts its own token.
     pub(crate) unsafe fn prepare_under_lease(
         base: &Handle,
         expected_account_sid: &str,
         request: RunRequest,
         _lease: &Handle,
     ) -> Result<Self> {
-        Self::prepare_impl(base, expected_account_sid, request, None)
+        Self::prepare_impl(
+            base,
+            expected_account_sid,
+            request,
+            None,
+            ExecutionPath::DedicatedHelper,
+        )
     }
     unsafe fn prepare_impl(
         base: &Handle,
         expected_account_sid: &str,
         request: RunRequest,
         account_lease: Option<Handle>,
+        execution_path: ExecutionPath,
     ) -> Result<Self> {
         request.validate()?;
         let actual = winutil::string_from_sid_bytes(&token::get_user_sid_bytes(base.raw())?)
@@ -305,10 +321,14 @@ impl AdmittedLaunch {
             parts[0], parts[1], parts[2], parts[3]
         );
         let cap = token::LocalSid::from_string(&capability_string)?;
-        let restricted = Handle::from_raw(token::create_strict_write_token_from(
-            base.raw(),
-            &[cap.as_ptr()],
-        )?)?;
+        let restricted = match execution_path {
+            ExecutionPath::Standalone => Some(Handle::from_raw(
+                token::create_strict_write_token_from(base.raw(), &[cap.as_ptr()])?,
+            )?),
+            ExecutionPath::DedicatedHelper => None,
+        };
+        // Always use the actual base token's logon SID. In helper mode this is
+        // the suspended helper token, not a separate broker-side logon session.
         let desktop = PrivateDesktop::for_token_with_cap(base.raw(), Some(&capability_string))?;
         let (mut targets, mut pins, mut guards) = (Vec::new(), Vec::new(), Vec::new());
         // Explicit denies first; they also cover protected-inheritance existing descendants
@@ -434,8 +454,12 @@ impl AdmittedLaunch {
     /// On execution/cleanup error, per-account/capability ACEs remain for explicit broker recovery;
     /// this deliberately preserves read denies if any descendant's death is uncertain.
     pub fn run(self) -> Result<RunResult> {
+        let restricted = self
+            .restricted
+            .as_ref()
+            .context("helper-only admission cannot execute directly; dedicated helper required")?;
         let result =
-            unsafe { run_restricted(self.restricted.raw(), self.desktop.name(), &self.request) }
+            unsafe { run_restricted(restricted.raw(), self.desktop.name(), &self.request) }
                 .context(
                     "launch failed; per-account/capability ACLs retained until verified cleanup",
                 )?;

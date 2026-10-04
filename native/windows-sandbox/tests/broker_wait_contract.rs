@@ -72,3 +72,45 @@ fn broker_api_errors_have_static_phase_labels_and_numeric_codes() {
     assert!(!wrapper.contains("path"));
     assert!(!wrapper.contains("request"));
 }
+
+#[test]
+fn cross_account_admission_is_query_only_and_cannot_launch_directly() {
+    let launch = BROKER
+        .split("pub unsafe fn run_via_dedicated_helper(")
+        .nth(1)
+        .unwrap()
+        .split("pub fn helper_main(")
+        .next()
+        .unwrap();
+    let token_open = launch
+        .split("OpenProcessToken(")
+        .nth(1)
+        .unwrap()
+        .split("&mut base")
+        .next()
+        .unwrap();
+    assert!(token_open.contains("TOKEN_QUERY"));
+    for forbidden in [
+        "TOKEN_DUPLICATE",
+        "TOKEN_ASSIGN_PRIMARY",
+        "TOKEN_ADJUST_DEFAULT",
+        "TOKEN_ADJUST_PRIVILEGES",
+    ] {
+        assert!(!token_open.contains(forbidden));
+    }
+    let admission = include_str!("../src/admission.rs");
+    let helper_admit = admission
+        .split("pub(crate) unsafe fn prepare_under_lease(")
+        .nth(1)
+        .unwrap()
+        .split("unsafe fn prepare_impl(")
+        .next()
+        .unwrap();
+    assert!(helper_admit.contains("ExecutionPath::DedicatedHelper"));
+    assert!(admission.contains("ExecutionPath::DedicatedHelper => None"));
+    assert!(admission.contains("helper-only admission cannot execute directly"));
+    assert!(admission.contains("PrivateDesktop::for_token_with_cap(base.raw()"));
+    let helper = BROKER.split("pub fn helper_main(").nth(1).unwrap();
+    assert!(helper.contains("token::create_strict_write_token_from("));
+    assert!(helper.contains("process::run_restricted_with_parent("));
+}
