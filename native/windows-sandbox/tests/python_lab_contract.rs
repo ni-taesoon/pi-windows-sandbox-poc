@@ -83,3 +83,20 @@ fn staging_selects_only_copied_inputs_and_diagnoses_links() {
             < SOURCES.find("foreach ($child in Get-ChildItem").unwrap()
     );
 }
+
+#[test]
+fn only_observed_unused_root_alias_can_be_excluded() {
+    for required in [
+        "$source -eq (Join-Path $runtime 'python3.exe')",
+        "$item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::Directory)",
+        "$item.LinkType -eq 'SymbolicLink'",
+        "unused-root-python3-symbolic-link-not-copied",
+        "skippedRuntimeEntries=$skipped.ToArray()",
+    ] {
+        assert!(SOURCES.contains(required), "missing {required}");
+    }
+    assert!(!SOURCES.contains("ResolveLinkTarget"));
+    assert!(!SOURCES.contains(".Target"));
+    assert!(STAGER.contains("excludedRuntimeEntries=@($selection.skippedRuntimeEntries)"));
+    assert!(DRIVER.contains(r#"runtime\python.exe"#));
+}

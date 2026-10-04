@@ -1,0 +1,13 @@
+   Compiling pi-windows-sandbox v0.1.0 (/workspace/scratch/909535b19017/pi-windows-sandbox-poc/native/windows-sandbox)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running tests/python_lab_contract.rs (native/windows-sandbox/target/debug/deps/python_lab_contract-f88b7be9f1b3a630)
+
+running 5 tests
+test staging_requires_explicit_scope_and_hashes ... ok
+test native_evidence_is_required_before_narrow_pass ... ok
+test only_observed_unused_root_alias_can_be_excluded ... ok
+test staging_selects_only_copied_inputs_and_diagnoses_links ... ok
+test production_gate_and_fixed_lab_surface_remain_separate ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
