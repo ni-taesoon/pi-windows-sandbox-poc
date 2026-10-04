@@ -68,7 +68,7 @@ fn dependency_sequence_is_fixed_bounded_and_precedes_python() {
         .nth(1)
         .unwrap();
     let expected = [
-        "ucrtbase", "msvcrt", "rpcrt4", "sechost", "advapi32", "bcrypt", "version", "ws2_32",
+        "ucrtbase", "msvcrt", "rpcrt4", "bcrypt", "sechost", "advapi32", "version", "ws2_32",
     ];
     let actual: Vec<_> = entry
         .lines()
