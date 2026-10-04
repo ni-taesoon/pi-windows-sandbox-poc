@@ -9,6 +9,7 @@ param(
   [string]$ExpectedDriverSha256,
   [string]$ExpectedHelperSha256,
   [string]$ExpectedPythonSha256,
+  [string]$ExpectedProbeSha256,
   [string]$ApprovedSourceSha256
 )
 $ErrorActionPreference = 'Stop'
@@ -32,12 +33,13 @@ if ($Phase -eq 'Stage') {
   if (Test-Path -LiteralPath $root) { throw 'Existing lab root refused. Start a fresh disposable VM.' }
   if (-not $PythonHome -or -not $BuildDirectory) { throw 'Stage requires explicit PythonHome and BuildDirectory.' }
   . "$PSScriptRoot/windows_lab_stage_sources.ps1"
-  $selection = Get-LabStageSources -PythonHome $PythonHome -BuildDirectory $BuildDirectory
+  $selection = Get-LabStageSources -PythonHome $PythonHome -BuildDirectory $BuildDirectory -IncludeLoaderProbe:([bool]$ExpectedProbeSha256)
   $PythonHome = $selection.runtimeRoot
   foreach ($excluded in $selection.skippedRuntimeEntries) {
     Write-Output ("LAB_STAGE_EXCLUDED_UNUSED_ALIAS: " + ($excluded | ConvertTo-Json -Compress))
   }
   $approvedHashes = @($ExpectedDriverSha256, $ExpectedHelperSha256, $ExpectedPythonSha256, $ApprovedSourceSha256)
+  if ($ExpectedProbeSha256) { $approvedHashes += $ExpectedProbeSha256 }
   if (@($approvedHashes | Where-Object { $_ -notmatch '^[0-9a-fA-F]{64}$' }).Count) { throw 'Explicit approved build/runtime/source SHA256 pins are required.' }
   foreach ($pin in @(
     @($selection.driver, $ExpectedDriverSha256),
@@ -45,6 +47,7 @@ if ($Phase -eq 'Stage') {
     @("$PythonHome\python.exe", $ExpectedPythonSha256))) {
     if ((Get-FileHash -Algorithm SHA256 -LiteralPath $pin[0]).Hash -ne $pin[1]) { throw "Approved executable hash mismatch: $($pin[0])" }
   }
+  if ($ExpectedProbeSha256 -and (Get-FileHash -Algorithm SHA256 -LiteralPath $selection.probe).Hash -ne $ExpectedProbeSha256) { throw 'Approved probe hash mismatch.' }
   New-Item -ItemType Directory -Path $root | Out-Null
   # Replace inherited ACL before putting executables or credentials in this tree.
   $ownerSid = $identity.User.Value
@@ -54,6 +57,7 @@ if ($Phase -eq 'Stage') {
   foreach ($directory in @('trusted','runtime','work')) { New-Item -ItemType Directory -Path "$root\$directory" | Out-Null }
   Copy-Item -LiteralPath $selection.helper -Destination "$root\trusted\pi-windows-sandbox.exe"
   Copy-Item -LiteralPath $selection.driver -Destination $driver
+  if ($ExpectedProbeSha256) { Copy-Item -LiteralPath $selection.probe -Destination "$root\trusted\loader_probe.exe" }
   # No downloading, package installation, pip, or execution of the source Python.
   # Consume only the validated breadth-first selection, never a second wildcard
   # traversal. Recheck each item at copy time; trusted quiescent source remains
@@ -72,6 +76,7 @@ if ($Phase -eq 'Stage') {
     @("$root\runtime\python.exe", $ExpectedPythonSha256))) {
     if ((Get-FileHash -Algorithm SHA256 -LiteralPath $pin[0]).Hash -ne $pin[1]) { throw "Staged executable hash mismatch: $($pin[0])" }
   }
+  if ($ExpectedProbeSha256 -and (Get-FileHash -Algorithm SHA256 -LiteralPath "$root\trusted\loader_probe.exe").Hash -ne $ExpectedProbeSha256) { throw 'Staged probe hash mismatch.' }
   # Scope all reset/owner changes strictly to the new synthetic tree.
   Invoke-Icacls -Arguments @("$root\trusted", '/reset', '/T', '/Q')
   Invoke-Icacls -Arguments @("$root\runtime", '/reset', '/T', '/Q')
@@ -81,7 +86,7 @@ if ($Phase -eq 'Stage') {
     osCaption=$os.Caption; osBuild=$os.BuildNumber; imageOs=$env:ImageOS; sourceManifestSha256=$ApprovedSourceSha256; pythonSourcePath=$PythonHome; pythonFileVersion=(Get-Item -LiteralPath "$PythonHome\python.exe").VersionInfo.FileVersion; driverSha256=(Get-FileHash -Algorithm SHA256 -LiteralPath $driver).Hash;
     helperSha256=(Get-FileHash -Algorithm SHA256 -LiteralPath "$root\trusted\pi-windows-sandbox.exe").Hash;
     pythonSha256=(Get-FileHash -Algorithm SHA256 -LiteralPath "$root\runtime\python.exe").Hash;
-    excludedRuntimeEntries=@($selection.skippedRuntimeEntries); nativeValidated=$false } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath "$root\trusted\stage-evidence.json" -Encoding UTF8
+    probeSha256=$ExpectedProbeSha256; excludedRuntimeEntries=@($selection.skippedRuntimeEntries); nativeValidated=$false } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath "$root\trusted\stage-evidence.json" -Encoding UTF8
   Write-Output 'LAB_STAGED_ONLY: no account or sandbox Python process created.'
   exit 0
 }

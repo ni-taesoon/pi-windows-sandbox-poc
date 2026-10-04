@@ -186,10 +186,25 @@ def sanitize_events(payload):
             errors.append({'channel':item['channel'],'provider':item['provider'],'noMatchingEvents':item.get('noMatchingEvents') is True,'hresult':value if isinstance(value,int) and -(2**31)<=value<2**31 else None})
     return {'status':'existing_events_only','events':accepted,'unattributedCount':unassigned,'invalidCount':invalid,'queryErrors':errors,'limitation':'No attributable events is not evidence that initialization succeeded.'}
 
+def validate_probe_imports(parsed):
+    if parsed['machine']!='0x8664' or parsed['imports']!=['kernel32.dll'] or parsed['delayImports']:
+        raise ValueError('probe_import_allowlist')
+
+def verify_probe():
+    item = Path('native/windows-sandbox/target/x86_64-pc-windows-msvc/debug/loader_probe.exe')
+    metadata=item.lstat()
+    if not stat.S_ISREG(metadata.st_mode) or getattr(metadata,'st_file_attributes',0) & 0x400 or metadata.st_size > MAX_IMAGE:
+        raise ValueError('invalid_probe_file')
+    with item.open('rb') as handle: data=handle.read(MAX_IMAGE+1)
+    parsed=pe_imports(data)
+    validate_probe_imports(parsed)
+    return {'status':'probe_imports_verified','imports':parsed['imports'],'sha256':hashlib.sha256(data).hexdigest()}
+
 def main():
-    parser=argparse.ArgumentParser(); parser.add_argument('mode',choices=['pe','events']); args=parser.parse_args()
+    parser=argparse.ArgumentParser(); parser.add_argument('mode',choices=['pe','events','verify-probe']); args=parser.parse_args()
     try:
         if args.mode=='pe': result=inspect_staged_pe()
+        elif args.mode=='verify-probe': result=verify_probe()
         else:
             raw=sys.stdin.buffer.read(MAX_INPUT+1)
             if len(raw)>MAX_INPUT: raise ValueError('input_bound')

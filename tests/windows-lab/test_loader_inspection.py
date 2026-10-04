@@ -60,6 +60,11 @@ class LoaderInspectionTests(unittest.TestCase):
         with self.assertRaises(ValueError):m.sanitize_events(p)
         p=payload(event());p['window']['end']='2026-10-04T11:03:00Z'
         with self.assertRaises(ValueError):m.sanitize_events(p)
+    def test_probe_import_allowlist_is_kernel32_only(self):
+        valid={'machine':'0x8664','imports':['kernel32.dll'],'delayImports':[]}
+        m.validate_probe_imports(valid)
+        for patch in [{'imports':[]},{'imports':['kernel32.dll','ucrtbase.dll']},{'imports':['kernel32.dll','msvcrt.dll']},{'delayImports':['python312.dll']},{'machine':'0x014C'}]:
+            with self.assertRaises(ValueError):m.validate_probe_imports({**valid,**patch})
     def test_collector_has_no_trace_or_runtime_execution(self):
         source=(ROOT/'scripts/collect_windows_loader_events.ps1').read_text()
         for forbidden in ['New-WinEvent','wevtutil','logman','Set-Acl','Start-Process','Enable-']:
