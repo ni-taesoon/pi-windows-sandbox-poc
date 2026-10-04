@@ -19,6 +19,8 @@ pub mod network;
 mod proc_thread_attr;
 #[cfg(windows)]
 pub mod process;
+#[cfg(all(windows, feature = "lab-sechost-breakpoints"))]
+mod sechost_breakpoints;
 #[cfg(windows)]
 pub mod setup;
 #[cfg(windows)]

@@ -453,13 +453,26 @@ pub fn helper_main(name: &str, expected_broker: u32) -> Result<()> {
         #[cfg(feature = "lab-loader-trace")]
         let result = {
             let mut trace = crate::loader_trace::LoaderTrace::default();
-            let result = crate::process::run_restricted_with_parent_trace(
-                restricted.raw(),
-                &payload.private_desktop,
-                &request,
-                &parent,
-                &mut trace,
-            );
+            let fixed_probe = request.argv.len() == 1
+                && request.argv[0] == r"C:\PiSandboxLab\trusted\loader_probe.exe";
+            let result = if cfg!(feature = "lab-sechost-breakpoints") && !fixed_probe {
+                #[cfg(feature = "lab-sechost-breakpoints")]
+                trace.original_not_debugged();
+                crate::process::run_restricted_with_parent(
+                    restricted.raw(),
+                    &payload.private_desktop,
+                    &request,
+                    &parent,
+                )
+            } else {
+                crate::process::run_restricted_with_parent_trace(
+                    restricted.raw(),
+                    &payload.private_desktop,
+                    &request,
+                    &parent,
+                    &mut trace,
+                )
+            };
             if result.is_err() {
                 trace.runner_failed();
             }

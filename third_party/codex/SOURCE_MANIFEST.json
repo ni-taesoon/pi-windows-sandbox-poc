@@ -41,7 +41,7 @@
           "sha256": "2630fa3d2d033005343448b13981516bf7b0f72457bb5eb6abb0cde09592c4e2"
         }
       ],
-      "adapted_sha256": "da70713258833a3c2711dec3d1d6c34657e05de612632520f0b8512887c7cc33"
+      "adapted_sha256": "3a4007c356c9fbaec16e8a5b3031ca18efd6afbfd42cd9202e491e674c01c58a"
     },
     {
       "destination": "native/windows-sandbox/src/desktop.rs",
@@ -57,7 +57,7 @@
       "destination": "native/windows-sandbox/src/lib.rs",
       "upstream": [],
       "origin": "new product integration source",
-      "adapted_sha256": "2f6372a5e3384e449aab0aa6c3b6a5d78758131978e3c9534b09f07481fb174f"
+      "adapted_sha256": "5c8bb81be2c1d5a084d69a4876473bbf83c864b29f1b2bd3e0237ee50e0a7aa8"
     },
     {
       "destination": "native/windows-sandbox/src/main.rs",
@@ -277,7 +277,13 @@
       "destination": "native/windows-sandbox/src/loader_trace.rs",
       "upstream": [],
       "origin": "new product integration source",
-      "adapted_sha256": "2a2462242a1b7d366893c82ca9e60ff95b5ea051f77d445d32ff60f92b4126d0"
+      "adapted_sha256": "9044a7defd829b7fd36b1eb6fe4f2042b22202bf365434783b43c530379fbdee"
+    },
+    {
+      "destination": "native/windows-sandbox/src/sechost_breakpoints.rs",
+      "upstream": [],
+      "origin": "new product integration source",
+      "adapted_sha256": "245e2e6483c7a66d2db87efac0e57243feeb3044d9156dc25ba2b609c6cda49f"
     }
   ]
 }

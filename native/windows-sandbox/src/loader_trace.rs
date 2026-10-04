@@ -1,4 +1,4 @@
-//! Explicit lab debugger: no attach, memory/context operations, injection or grants.
+//! Explicit lab debugger; optional hash-bound fixed-probe hardware diagnostic.
 use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -40,6 +40,8 @@ struct Event {
 #[derive(Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct LoaderTrace {
+    #[cfg(feature = "lab-sechost-breakpoints")]
+    sechost: crate::sechost_breakpoints::Evidence,
     events: Vec<Event>,
     event_count: u32,
     stored_events_truncated: bool,
@@ -57,6 +59,7 @@ enum Stage {
     UnexpectedProcess,
     Runner,
     Termination,
+    HardwareDiagnostic,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -65,6 +68,11 @@ struct Failure {
     win32: Option<u32>,
 }
 impl LoaderTrace {
+    #[cfg(feature = "lab-sechost-breakpoints")]
+    pub fn original_not_debugged(&mut self) {
+        self.sechost.status = "not_applied_original_python".into();
+    }
+
     pub fn runner_failed(&mut self) {
         if self.failure.is_none() {
             self.failure = Some(Failure {
@@ -83,6 +91,8 @@ struct Pending {
 }
 pub(crate) struct DebugPump<'a> {
     trace: &'a mut LoaderTrace,
+    #[cfg(feature = "lab-sechost-breakpoints")]
+    hardware: crate::sechost_breakpoints::State,
     pid: u32,
     job: HANDLE,
     pending: Option<Pending>,
@@ -118,13 +128,13 @@ fn image_size(header: &[u8]) -> Option<usize> {
     ) as usize;
     (4096..=128 * 1024 * 1024).contains(&size).then_some(size)
 }
-unsafe fn module_and_close(file: HANDLE) -> (Option<String>, Option<usize>) {
+unsafe fn module_and_close(file: HANDLE) -> (Option<String>, Option<usize>, Option<Vec<u8>>) {
     if file == 0 || file == INVALID_HANDLE_VALUE {
-        return (None, None);
+        return (None, None, None);
     }
     // These are transferred FILE handles, not OS-managed debug process/thread handles.
     // All metadata comes from the file; no target-memory pointer is read.
-    let result = (|| -> Option<(String, Option<usize>)> {
+    let result = (|| -> Option<(String, Option<usize>, Option<Vec<u8>>)> {
         let mut buffer = vec![0u16; 32768];
         let length = GetFinalPathNameByHandleW(file, buffer.as_mut_ptr(), buffer.len() as u32, 0);
         if length == 0 || length as usize >= buffer.len() {
@@ -150,15 +160,39 @@ unsafe fn module_and_close(file: HANDLE) -> (Option<String>, Option<usize>) {
                 size = image_size(&header[..(read as usize).min(header.len())]);
             }
         }
-        Some((name, size))
+        let mut bytes = None;
+        #[cfg(feature = "lab-sechost-breakpoints")]
+        if name == "sechost.dll" && SetFilePointerEx(file, 0, null_mut(), FILE_BEGIN) != 0 {
+            let mut data = Vec::new();
+            loop {
+                let mut chunk = [0u8; 8192];
+                let mut got = 0;
+                if ReadFile(file, chunk.as_mut_ptr(), 8192, &mut got, null_mut()) == 0 {
+                    return None;
+                }
+                if got == 0 {
+                    break;
+                }
+                if data.len() + got as usize > 8 * 1024 * 1024 {
+                    return None;
+                }
+                data.extend_from_slice(&chunk[..got as usize]);
+            }
+            bytes = Some(data);
+        }
+        Some((name, size, bytes))
     })();
     CloseHandle(file);
-    result.map_or((None, None), |(name, size)| (Some(name), size))
+    result.map_or((None, None, None), |(name, size, bytes)| {
+        (Some(name), size, bytes)
+    })
 }
 impl<'a> DebugPump<'a> {
     pub fn new(pid: u32, job: HANDLE, trace: &'a mut LoaderTrace) -> Self {
         Self {
             trace,
+            #[cfg(feature = "lab-sechost-breakpoints")]
+            hardware: crate::sechost_breakpoints::State::default(),
             pid,
             job,
             pending: None,
@@ -230,15 +264,40 @@ impl<'a> DebugPump<'a> {
             initial_breakpoint_handled: false,
         };
         let mut status = DBG_CONTINUE;
+        #[allow(unused_mut)]
+        let mut hardware_error: Option<anyhow::Error> = None;
         match raw.dwDebugEventCode {
             CREATE_PROCESS_DEBUG_EVENT => {
                 event.kind = Kind::ProcessCreated;
                 event.module = module_and_close(raw.u.CreateProcessInfo.hFile).0;
                 self.create_seen = true;
+                #[cfg(feature = "lab-sechost-breakpoints")]
+                if raw.dwProcessId == self.pid {
+                    self.hardware
+                        .created(raw.u.CreateProcessInfo.hThread, raw.dwThreadId);
+                }
             }
             LOAD_DLL_DEBUG_EVENT => {
                 event.kind = Kind::DllLoaded;
-                let (module, size) = module_and_close(raw.u.LoadDll.hFile);
+                let (module, size, _bytes) = module_and_close(raw.u.LoadDll.hFile);
+                #[cfg(feature = "lab-sechost-breakpoints")]
+                if raw.dwProcessId == self.pid
+                    && module.as_deref() == Some("sechost.dll")
+                    && self.cleanup_deadline.is_none()
+                {
+                    hardware_error = match _bytes {
+                        Some(bytes) => self
+                            .hardware
+                            .arm(
+                                raw.dwThreadId,
+                                raw.u.LoadDll.lpBaseOfDll as u64,
+                                &bytes,
+                                &mut self.trace.sechost,
+                            )
+                            .err(),
+                        None => Some(anyhow::anyhow!("diagnostic module bytes unavailable")),
+                    };
+                }
                 if module.as_deref() == Some("ntdll.dll") && raw.dwProcessId == self.pid {
                     if let Some(size) = size {
                         let start = raw.u.LoadDll.lpBaseOfDll as usize;
@@ -247,10 +306,22 @@ impl<'a> DebugPump<'a> {
                 }
                 event.module = module;
             }
-            UNLOAD_DLL_DEBUG_EVENT => event.kind = Kind::DllUnloaded,
+            UNLOAD_DLL_DEBUG_EVENT => {
+                event.kind = Kind::DllUnloaded;
+                #[cfg(feature = "lab-sechost-breakpoints")]
+                if raw.dwProcessId == self.pid
+                    && self.hardware.is_module(raw.u.UnloadDll.lpBaseOfDll as u64)
+                {
+                    hardware_error = self.hardware.restore(&mut self.trace.sechost).err();
+                }
+            }
             CREATE_THREAD_DEBUG_EVENT => event.kind = Kind::ThreadCreated,
             EXIT_THREAD_DEBUG_EVENT => {
                 event.kind = Kind::ThreadExited;
+                #[cfg(feature = "lab-sechost-breakpoints")]
+                if raw.dwProcessId == self.pid {
+                    self.hardware.primary_exited(raw.dwThreadId);
+                }
                 event.code = Some(raw.u.ExitThread.dwExitCode);
             }
             OUTPUT_DEBUG_STRING_EVENT => event.kind = Kind::DebugStringSkipped, // Never read the target string pointer.
@@ -260,6 +331,10 @@ impl<'a> DebugPump<'a> {
             }
             EXIT_PROCESS_DEBUG_EVENT => {
                 event.kind = Kind::ProcessExited;
+                #[cfg(feature = "lab-sechost-breakpoints")]
+                if raw.dwProcessId == self.pid {
+                    self.hardware.process_exited(&mut self.trace.sechost);
+                }
                 event.code = Some(raw.u.ExitProcess.dwExitCode);
             }
             EXCEPTION_DEBUG_EVENT => {
@@ -282,8 +357,46 @@ impl<'a> DebugPump<'a> {
                 } else {
                     status = DBG_EXCEPTION_NOT_HANDLED;
                 }
+                #[cfg(feature = "lab-sechost-breakpoints")]
+                if raw.dwProcessId == self.pid
+                    && exception.dwFirstChance != 0
+                    && exception.ExceptionRecord.ExceptionCode == EXCEPTION_SINGLE_STEP
+                {
+                    match self.hardware.exception(
+                        raw.dwThreadId,
+                        exception.ExceptionRecord.ExceptionAddress as u64,
+                        &mut self.trace.sechost,
+                    ) {
+                        Ok(true) => status = DBG_CONTINUE,
+                        Ok(false) => {}
+                        Err(error) => hardware_error = Some(error),
+                    }
+                }
             }
             _ => {}
+        }
+        #[cfg(feature = "lab-sechost-breakpoints")]
+        if raw.dwProcessId == self.pid
+            && self.cleanup_deadline.is_some()
+            && raw.dwDebugEventCode != EXIT_PROCESS_DEBUG_EVENT
+        {
+            if let Err(error) = self.hardware.restore(&mut self.trace.sechost) {
+                hardware_error = Some(error);
+            }
+        }
+        if hardware_error.is_some() {
+            self.trace.failure = Some(Failure {
+                stage: Stage::HardwareDiagnostic,
+                win32: None,
+            });
+            #[cfg(feature = "lab-sechost-breakpoints")]
+            {
+                self.trace.sechost.status = "diagnostic_failed".into();
+                if self.trace.sechost.failure_stage.is_none() {
+                    self.trace.sechost.failure_stage = Some("hardware_event_validation".into());
+                }
+            }
+            TerminateJobObject(self.job, 1);
         }
         self.pending = Some(Pending {
             pid: raw.dwProcessId,
@@ -302,6 +415,9 @@ impl<'a> DebugPump<'a> {
         self.trace.event_limit_reached |= self.trace.event_count >= EVENT_LIMIT;
         let matches = raw.dwProcessId == self.pid;
         self.continue_pending()?; // Never leave a successfully read event suspended for bookkeeping.
+        if let Some(error) = hardware_error {
+            return Err(error);
+        }
         if !matches {
             self.trace.failure = Some(Failure {
                 stage: Stage::UnexpectedProcess,
