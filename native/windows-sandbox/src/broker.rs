@@ -373,12 +373,18 @@ pub unsafe fn run_via_dedicated_helper(
     let startup = Instant::now() + Duration::from_secs(10);
     pipe.connect(helper.pid, startup)?;
     pipe.send(&payload, startup)?;
+    let response_deadline = Instant::now()
+        + Duration::from_millis(u64::from(payload.request.timeout_ms))
+        + Duration::from_secs(15);
+    let startup_diagnostics: crate::startup_diagnostics::StartupDiagnostics = pipe
+        .receive(response_deadline)
+        .context("helper startup diagnostics unavailable")?;
+    eprintln!(
+        "helper_startup_access={}",
+        serde_json::to_string(&startup_diagnostics)?
+    );
     let result: RunResult = pipe
-        .receive(
-            Instant::now()
-                + Duration::from_millis(u64::from(payload.request.timeout_ms))
-                + Duration::from_secs(15),
-        )
+        .receive(response_deadline)
         .context("helper failed; account ACLs retained for verified recovery")?;
     ensure!(result.kind == "result", "invalid helper result type");
     ensure!(
@@ -425,6 +431,15 @@ pub fn helper_main(name: &str, expected_broker: u32) -> Result<()> {
             GetErrorMode() & SEM_FAILCRITICALERRORS != 0,
             "helper critical-error mode was not set"
         );
+        let startup_diagnostics = crate::startup_diagnostics::inspect(
+            base.raw(),
+            restricted.raw(),
+            &payload.private_desktop,
+        );
+        pipe.send(
+            &startup_diagnostics,
+            Instant::now() + Duration::from_secs(10),
+        )?;
         let result = crate::process::run_restricted_with_parent(
             restricted.raw(),
             &payload.private_desktop,
