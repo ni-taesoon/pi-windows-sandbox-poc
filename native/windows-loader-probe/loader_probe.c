@@ -50,6 +50,48 @@ static void load_system(const WCHAR *tail, const char *stage) {
     system_library[length] = 0;
     load_fixed(system_library,stage);
 }
+/* Read-only self-access checks. Handles are never used to modify any object. */
+typedef LONG (NTAPI *lab_open_token_fn)(HANDLE, ACCESS_MASK, PHANDLE);
+static void record_handle(HANDLE handle, const char *stage) {
+    DWORD error = handle == NULL ? GetLastError() : 0;
+    if (handle != NULL && !CloseHandle(handle)) {
+        DWORD close_error = GetLastError();
+        emit("self-handle-close-win32",close_error);
+        ExitProcess(0xE0030001);
+    }
+    emit(stage,error);
+}
+static void token_access(lab_open_token_fn open_token, ACCESS_MASK rights, const char *stage) {
+    HANDLE token = NULL;
+    LONG status = open_token(GetCurrentProcess(),rights,&token);
+    if (status >= 0) {
+        if (token == NULL || !CloseHandle(token)) {
+            emit("self-token-close-win32",token == NULL ? ERROR_INVALID_HANDLE : GetLastError());
+            ExitProcess(0xE0030001);
+        }
+    }
+    emit("self-token-requested-mask",rights);
+    emit(stage,(DWORD)status);
+}
+static void self_access(void) {
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    lab_open_token_fn open_token;
+    if (ntdll == NULL) { DWORD error=GetLastError(); emit("self-ntdll-win32",error); ExitProcess(0xE0030002); }
+    /* The one fixed resolver avoids pre-entry advapi32/sechost initialization. */
+    open_token = (lab_open_token_fn)GetProcAddress(ntdll,"NtOpenProcessToken");
+    if (open_token == NULL) { DWORD error=GetLastError(); emit("self-resolver-win32",error); ExitProcess(0xE0030002); }
+    record_handle(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,GetCurrentProcessId()),"self-process-query-win32");
+    record_handle(OpenProcess(PROCESS_DUP_HANDLE,FALSE,GetCurrentProcessId()),"self-process-duplicate-win32");
+    record_handle(OpenThread(THREAD_QUERY_LIMITED_INFORMATION,FALSE,GetCurrentThreadId()),"self-thread-query-win32");
+    record_handle(OpenThread(THREAD_SET_THREAD_TOKEN,FALSE,GetCurrentThreadId()),"self-thread-settoken-win32");
+    token_access(open_token,TOKEN_QUERY,"self-token-query-ntstatus");
+    token_access(open_token,TOKEN_DUPLICATE,"self-token-duplicate-ntstatus");
+    token_access(open_token,TOKEN_IMPERSONATE,"self-token-impersonate-ntstatus");
+    token_access(open_token,TOKEN_QUERY | TOKEN_DUPLICATE,"self-token-queryduplicate-ntstatus");
+    token_access(open_token,TOKEN_ADJUST_DEFAULT,"self-token-adjustdefault-ntstatus");
+    token_access(open_token,TOKEN_ADJUST_PRIVILEGES,"self-token-adjustprivileges-ntstatus");
+    token_access(open_token,READ_CONTROL,"self-token-readcontrol-ntstatus");
+}
 void WINAPI lab_probe_entry(void) {
     emit("entry",0);
     Sleep(100); /* Bounded independent observer opportunity; still inside the 15s job deadline. */
@@ -58,6 +100,7 @@ void WINAPI lab_probe_entry(void) {
     /* Diagnostic dependency-first order, not a claim about Windows loader order. */
     load_system(L"\\msvcrt.dll","msvcrt");
     load_system(L"\\rpcrt4.dll","rpcrt4");
+    self_access();
     load_system(L"\\sechost.dll","sechost");
     load_system(L"\\advapi32.dll","advapi32");
     load_system(L"\\bcrypt.dll","bcrypt");
