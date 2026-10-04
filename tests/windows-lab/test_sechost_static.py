@@ -5,7 +5,7 @@ import unittest
 import json
 import struct
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
-from sechost_structure import summarize, rip_indirect_slot
+from sechost_structure import summarize, rip_indirect_slot, initializer_table
 
 spec = importlib.util.spec_from_file_location('static_probe', Path(__file__).resolve().parents[2] / 'scripts/inspect_sechost_static.py')
 module = importlib.util.module_from_spec(spec)
@@ -92,6 +92,23 @@ class IndirectTests(unittest.TestCase):
         image[512:518] = b'\xff\x25'+struct.pack('<i',0x1180-0x1006)
         result = summarize(bytes(image),'  0000000180001000: FF 25 7A 01 00 00 jmp qword ptr [rip+17Ah]')
         self.assertEqual(result['facts'][0]['import'],'NtOpenToken')
+
+class InitializerTests(unittest.TestCase):
+    def code(self,begin=0x1100,end=0x1110):
+        return b'\x48\x8d\x15'+struct.pack('<i',end-0x1007)+b'\x48\x8d\x0d'+struct.pack('<i',begin-0x100e)
+    def test_exact_table_skips_null_and_preserves_order(self):
+        data = {0x1100:struct.pack('<Q',0),0x1108:struct.pack('<Q',0x180001200)}
+        result = initializer_table(self.code(),0x1000,0x180000000,0x2000,lambda r,n:data[r],lambda r:r==0x1200)
+        self.assertEqual(result['entries'],[{'slotRva':0x1108,'functionRva':0x1200}])
+    def test_bad_patterns_bounds_and_noncode_rejected(self):
+        reader = lambda r,n: struct.pack('<Q',0x180001200)
+        for code in [self.code()[:13],b'\x90'+self.code()[1:],self.code(0x1101),self.code(0x1120,0x1100),self.code(0x1100,0x1400)]:
+            with self.assertRaises(ValueError): initializer_table(code,0x1000,0x180000000,0x2000,reader,lambda r:True)
+        with self.assertRaises(ValueError): initializer_table(self.code(),0x1000,0x180000000,0x2000,reader,lambda r:False)
+    def test_duplicate_register_and_external_pointer_rejected(self):
+        code = bytearray(self.code());code[9]=0x15
+        with self.assertRaises(ValueError): initializer_table(bytes(code),0x1000,0x180000000,0x2000,lambda r,n:b'\0'*8,lambda r:True)
+        with self.assertRaises(ValueError): initializer_table(self.code(),0x1000,0x180000000,0x2000,lambda r,n:struct.pack('<Q',1),lambda r:True)
 
 if __name__ == '__main__':
     unittest.main()

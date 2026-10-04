@@ -24,6 +24,34 @@ def rip_indirect_slot(code, rva, image_size):
     return ('call' if modrm == 0x15 else 'jmp',slot)
 
 
+def initializer_table(code, start_rva, base, image_size, read_rva, executable):
+    """Exact adjacent RIP-relative LEAs to RCX/RDX; no pattern fallback."""
+    if len(code) != 14 or start_rva < 0 or start_rva+14 > image_size:
+        raise ValueError('initializer_lea_bounds')
+    arguments = {}
+    for index in (0,7):
+        instruction = code[index:index+7]
+        if instruction[:2] != b'\x48\x8d' or instruction[2] not in (0x0d,0x15):
+            raise ValueError('initializer_lea_pattern')
+        register = instruction[2]
+        if register in arguments:
+            raise ValueError('initializer_lea_duplicate')
+        arguments[register] = start_rva+index+7+struct.unpack_from('<i',instruction,3)[0]
+    begin,end = arguments[0x0d],arguments[0x15]
+    if begin%8 or end%8 or not 0 <= begin <= end <= image_size or end-begin > 64*8:
+        raise ValueError('initializer_table_bounds')
+    entries = []
+    for slot in range(begin,end,8):
+        value = struct.unpack('<Q',read_rva(slot,8))[0]
+        if not value:
+            continue
+        rva = value-base
+        if not 0 <= rva < image_size or not executable(rva):
+            raise ValueError('initializer_pointer_bounds')
+        entries.append({'slotRva':slot,'functionRva':rva})
+    return {'startRva':begin,'endRva':end,'entries':entries}
+
+
 def summarize(image, text):
     if len(image) > 8*1024*1024 or len(text) > 8*1024*1024 or image[:2] != b'MZ':
         raise ValueError('input_limit')
@@ -45,11 +73,15 @@ def summarize(image, text):
     if not 0 < entry < image_size <= 128*1024*1024:
         raise ValueError('entry_bounds')
     sections = []
+    executable_sections = []
     for n in range(count):
         _, virtual, rva, raw_size, raw = unpack('<8sIIII',opt+size+n*40)
         if raw+raw_size > len(image):
             raise ValueError('section_bounds')
         sections.append((rva,raw_size,raw))
+        characteristics = unpack('<I',opt+size+n*40+36)[0]
+        if characteristics & 0x20000000:
+            executable_sections.append((rva,raw_size))
     def offset(rva, length):
         hits = [raw+rva-start for start,size,raw in sections if start <= rva and rva+length <= start+size]
         if len(hits) != 1:
@@ -125,8 +157,37 @@ def summarize(image, text):
             raise ValueError('instruction_limit')
     if entry not in instructions:
         raise ValueError('entry_not_disassembled')
+    tables = []
+    initializer_functions = []
+    for at,(mnemonic,target,indirect,_) in instructions.items():
+        if mnemonic != 'call' or indirect or target not in instructions:
+            continue
+        thunk_kind,slot,thunk_indirect,_ = instructions[target]
+        if thunk_kind != 'jmp' or not thunk_indirect or imports.get(slot) != '_initterm_e':
+            continue
+        if len(tables) >= 4:
+            raise ValueError('initializer_call_limit')
+        record = {'callRva':at,'status':'unavailable'}
+        try:
+            call_at = offset(at,5)
+            if image[call_at] != 0xe8 or at+5+struct.unpack_from('<i',image,call_at+1)[0] != target:
+                raise ValueError('initializer_call_pattern')
+            if at-14 not in instructions or at-7 not in instructions:
+                raise ValueError('initializer_instruction_boundaries')
+            before = offset(at-14,14)
+            table = initializer_table(image[before:before+14],at-14,base,image_size,
+                lambda r,n: image[offset(r,n):offset(r,n)+n],
+                lambda r: any(start <= r < start+size for start,size in executable_sections))
+            record.update(table)
+            record['status'] = 'decoded'
+            for item in table['entries']:
+                if item['functionRva'] not in initializer_functions:
+                    initializer_functions.append(item['functionRva'])
+        except ValueError:
+            pass
+        tables.append(record)
     positions = sorted(instructions)
-    functions = [entry]
+    functions = [entry]+initializer_functions
     seen_functions = set()
     summaries = []
     total_visited = 0
@@ -183,6 +244,6 @@ def summarize(image, text):
         functions.extend(x for x in callees if x not in seen_functions and x not in functions)
     first = summaries[0]
     return {'entryRva':entry,'facts':first['facts'],'entryTruncated':first['truncated'],
-            'calleeSummaries':summaries[1:],'importSlots':len(imports),
+            'calleeSummaries':summaries[1:],'initializerTables':tables,'importSlots':len(imports),
             'visitedInstructions':total_visited,'truncated':bool(functions) or any(x['truncated'] for x in summaries),
             'limitation':'Entry-first heuristic static closure and up to seven direct-callee summaries; branch alternatives, parsing gaps, indirect calls and bounds prevent identifying the executed failure branch.'}
