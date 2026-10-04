@@ -51,6 +51,9 @@ enum ExecutionPath {
     DedicatedHelper,
 }
 const SHARE: u32 = FILE_SHARE_READ | FILE_SHARE_WRITE; // Never share deletion.
+                                                       // The post-guard handle is queried for file metadata/identity, not just traversed.
+                                                       // This requests existing broker read access; it changes no directory DACL.
+const GUARDED_DIRECTORY_QUERY_ACCESS: u32 = FILE_TRAVERSE | FILE_READ_ATTRIBUTES;
 const ACCESS: u32 = READ_CONTROL | WRITE_DAC | FILE_READ_ATTRIBUTES | FILE_READ_DATA;
 const WRITE_ALLOW: u32 = FILE_GENERIC_WRITE | DELETE | FILE_DELETE_CHILD;
 // Avoid READ_CONTROL/SYNCHRONIZE carried by FILE_GENERIC_WRITE in a deny ACE.
@@ -372,7 +375,8 @@ impl AdmittedLaunch {
                 ensure!(
                     GetFileInformationByHandle(target.handle.as_raw_handle() as HANDLE, &mut info)
                         != 0,
-                    "directory identity unavailable"
+                    "admission API failed: phase=initial-directory-identity; api=GetFileInformationByHandle; win32={}",
+                    std::io::Error::last_os_error().raw_os_error().unwrap_or(-1)
                 );
                 if guarded.insert((
                     info.dwVolumeSerialNumber,
@@ -383,7 +387,7 @@ impl AdmittedLaunch {
                     // Reject a path converted to a reparse before the guard existed.
                     let pin = nr::open_directory_no_reparse(
                         &target.path,
-                        FILE_TRAVERSE,
+                        GUARDED_DIRECTORY_QUERY_ACCESS,
                         SHARE,
                         nr::DirectoryOpenDisposition::OpenExisting,
                     )?;
@@ -391,7 +395,8 @@ impl AdmittedLaunch {
                     ensure!(
                         GetFileInformationByHandle(pin.as_raw_handle() as HANDLE, &mut current)
                             != 0,
-                        "guarded directory identity unavailable"
+                        "admission API failed: phase=guarded-directory-identity; api=GetFileInformationByHandle; win32={}",
+                        std::io::Error::last_os_error().raw_os_error().unwrap_or(-1)
                     );
                     ensure!(
                         (

@@ -108,3 +108,11 @@ helper's TOKEN_QUERY identity/logon information without constructing an unused
 cross-account restricted token. The helper retains its own restriction step.
 Standalone admission remains restricted; helper-only state cannot run directly.
 No token DACL or account privilege is broadened.
+
+## Guarded directory metadata access
+
+The post-guard directory pin requests read-attribute access in addition to traverse
+for its existing handle identity query. Directory guards, no-reparse opening,
+no-delete sharing and exact volume/file-index equality remain mandatory. Static
+phase/numeric-error diagnostics replace the previously ambiguous query failures;
+no account ACL or privilege grant is added.
