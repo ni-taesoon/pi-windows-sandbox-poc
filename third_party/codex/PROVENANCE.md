@@ -84,3 +84,10 @@ Fresh transaction ownership markers and SID/state readback scope recovery; the
 protected ready:false record is flushed before network setup or activation.
 These changes do not protect against a malicious privileged account-replacement
 race and are pending the next actual Windows attempt.
+
+## Remote-address representation comparison
+
+The new product-owned bounded address-set parser compares numeric IPv4/IPv6
+unions exactly for firewall remote addresses. Other selector fields stay exact;
+unknown syntax and unequal sets fail closed. This addresses a measured remote-address
+readback mismatch without assuming its unlogged Windows spelling.

@@ -474,7 +474,14 @@ fn verify_rule(rule: &INetFwRule3, spec: &BlockRuleSpec<'_>) -> Result<()> {
                 firewall_scope::mismatch_metadata(&actual, &expected)
             ),
         ))
-    })
+    })?;
+    if actual.remote_addresses != expected.remote_addresses {
+        // Only reached after exact full-set equality and the other 21 checks.
+        eprintln!(
+            "firewall_scope field=remote_addresses raw_string_equal=false semantic_set_equal=true"
+        );
+    }
+    Ok(())
 }
 
 fn configure_rule_network_scope(rule: &INetFwRule3, spec: &BlockRuleSpec<'_>) -> Result<()> {
