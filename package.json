@@ -1,14 +1,14 @@
 {
   "name": "pi-windows-sandbox-poc",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Independent Pi sandbox integration proof of concept with a pinned external Codex reference backend",
+  "description": "Pi tool integration with standalone Windows sandbox source extracted from a pinned upstream revision",
   "engines": { "node": ">=22.19.0" },
   "scripts": {
     "test": "node --test",
     "check": "node scripts/check-source.mjs",
     "test:pi-sdk": "node --test tests/pi-adapter/real-sdk.test.js",
-    "diagnose": "node packages/codex-backend/diagnose.mjs"
+    "diagnose": "node packages/native-backend/diagnose.mjs"
   }
 }

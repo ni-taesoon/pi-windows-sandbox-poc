@@ -1,5 +1,5 @@
 "use strict";
-// Executed ONLY inside the reference sandbox. All caller data arrives on stdin.
+// Executed ONLY inside the native sandbox. All caller data arrives on stdin.
 const fs = require("node:fs/promises");
 const { createHash } = require("node:crypto");
 const sha = (b) => createHash("sha256").update(b).digest("hex");
@@ -30,9 +30,9 @@ async function main() {
       const buffer = Buffer.alloc(op.length);
       const { bytesRead } = await handle.read(buffer, 0, op.length, op.offset);
       return {
-        data: buffer.subarray(0, bytesRead).toString(op.encoding),
-        encoding: op.encoding,
-        bytesRead,
+        content: buffer.subarray(0, bytesRead).toString("base64"),
+        encoding: "base64",
+        eof: op.offset + bytesRead >= info.size,
       };
     }
     let data;
@@ -41,9 +41,12 @@ async function main() {
       const prior = await handle.readFile();
       if (sha(prior) !== op.expectedHash) throw Error("FILE_CONFLICT");
       if (op.kind === "edit") {
-        const text = prior.toString("utf8");
+        const text = new TextDecoder("utf-8", {
+          fatal: true,
+          ignoreBOM: true,
+        }).decode(prior);
         const at = text.indexOf(op.oldText);
-        if (at < 0 || text.indexOf(op.oldText, at + op.oldText.length) !== -1)
+        if (at < 0 || text.indexOf(op.oldText, at + 1) !== -1)
           throw Error("FILE_CONFLICT");
         data = Buffer.from(
           text.slice(0, at) + op.newText + text.slice(at + op.oldText.length),
@@ -59,7 +62,7 @@ async function main() {
     }
     await handle.truncate(data.length);
     await handle.sync();
-    return { bytesWritten: data.length, sha256: sha(data) };
+    return { bytesWritten: data.length, hash: sha(data) };
   } finally {
     await handle?.close();
   }

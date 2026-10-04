@@ -1,0 +1,271 @@
+{
+  "repository": "https://github.com/openai/codex",
+  "commit": "a956835d020762cb2b570053af06f643a11c0ecc",
+  "license": "Apache-2.0",
+  "files": [
+    {
+      "destination": "native/windows-sandbox/src/acl.rs",
+      "upstream": [
+        {
+          "path": "codex-rs/windows-sandbox-rs/src/acl.rs",
+          "sha256": "3709a94b536b33bb6c2818242095b79b9d6180746d1991629de27ad92cec1437"
+        }
+      ],
+      "adapted_sha256": "f8097901f8c17cc45f3593eb6d4cbd46e967e0081fd6c89fb2bd943f4b33c402"
+    },
+    {
+      "destination": "native/windows-sandbox/src/acl_tests.rs",
+      "upstream": [
+        {
+          "path": "codex-rs/windows-sandbox-rs/src/acl_tests.rs",
+          "sha256": "ce2ff2741fa8ef6e4f48cd09b38c08c96f892edcfe3eff049f12221af5a4e993"
+        }
+      ],
+      "adapted_sha256": "e906a318901dd0f545194daf06534c7903c0eafd66b3536ccba46d3b2febd70c"
+    },
+    {
+      "destination": "native/windows-sandbox/src/admission.rs",
+      "upstream": [],
+      "origin": "new product integration source",
+      "adapted_sha256": "aff0b47f6da47dc34cc04305709e551046167905c24e8110190329e56e584344"
+    },
+    {
+      "destination": "native/windows-sandbox/src/broker.rs",
+      "upstream": [
+        {
+          "path": "codex-rs/windows-sandbox-rs/src/elevated/runner_client.rs",
+          "sha256": "bd8a1762e740eb348a2b6a44487103c576319e3dc41661b43105c1c4e734672a"
+        },
+        {
+          "path": "codex-rs/windows-sandbox-rs/src/elevated/runner_pipe.rs",
+          "sha256": "2630fa3d2d033005343448b13981516bf7b0f72457bb5eb6abb0cde09592c4e2"
+        }
+      ],
+      "adapted_sha256": "ab9239729e90a0c628354d42302a8b5295ece6fe3873c0ca033cccd8095bbeff"
+    },
+    {
+      "destination": "native/windows-sandbox/src/desktop.rs",
+      "upstream": [
+        {
+          "path": "codex-rs/windows-sandbox-rs/src/desktop.rs",
+          "sha256": "f42826c7ffc3e706982b5752d44fe77e90fd37f18e4cb3dc8c87adbb10fbc8c8"
+        }
+      ],
+      "adapted_sha256": "c8a0922a34654a20260ba906dc90c4b12e0485a9aa84a7e12bc098f5a25c4a29"
+    },
+    {
+      "destination": "native/windows-sandbox/src/lib.rs",
+      "upstream": [],
+      "origin": "new product integration source",
+      "adapted_sha256": "7c327b86cecb79fe806153ac05038ff1c65ff85086158fecfd2bd89b315c2876"
+    },
+    {
+      "destination": "native/windows-sandbox/src/main.rs",
+      "upstream": [],
+      "origin": "new product integration source",
+      "adapted_sha256": "41a865beb8ec189d121f3ee8099b3438b0dd4378224b9a71429cb91b63440afb"
+    },
+    {
+      "destination": "native/windows-sandbox/src/network.rs",
+      "upstream": [],
+      "origin": "new product integration source",
+      "adapted_sha256": "f114e640abc1e0a75b2402434b1c58d8395a4a3cba493bd0a1a6135cfb80dee7"
+    },
+    {
+      "destination": "native/windows-sandbox/src/network/firewall.rs",
+      "upstream": [
+        {
+          "path": "codex-rs/windows-sandbox-rs/src/setup_provisioning/firewall.rs",
+          "sha256": "798143ed6115dadd36ba35cc3edf6beb94def870269e954a8a01dc74a3c23306"
+        }
+      ],
+      "adapted_sha256": "c11f984ebcd98e3d95c399db33a03415b83d031c0fd53b9c1bef5d7ece1cd4e1"
+    },
+    {
+      "destination": "native/windows-sandbox/src/network/wfp.rs",
+      "upstream": [
+        {
+          "path": "codex-rs/windows-sandbox-rs/src/wfp.rs",
+          "sha256": "82effcda9c951ad62d1f1b4afa9b4f0ad59b3d35d7c2feab53a9b6838dd93fc4"
+        }
+      ],
+      "adapted_sha256": "33d5c9110f838ffaa41b8ca62b6c7d1497d6d22ed4acfd1b722f4f152d856418"
+    },
+    {
+      "destination": "native/windows-sandbox/src/network/wfp/filter_specs.rs",
+      "upstream": [
+        {
+          "path": "codex-rs/windows-sandbox-rs/src/wfp/filter_specs.rs",
+          "sha256": "11bef68565843485376f31dea62930d833c6b758ccc2a8613a8b1872a2a0e1f1"
+        }
+      ],
+      "adapted_sha256": "c7d1b6643cce358ba20a804758ea4382279d7f0463a2cc450233cdd02cc3f64a"
+    },
+    {
+      "destination": "native/windows-sandbox/src/policy_masks.rs",
+      "upstream": [],
+      "origin": "new product integration source",
+      "adapted_sha256": "bcd761adcf7c3529b1f244ac4589592fa412dedb8fd32557444bade3be1c69e8"
+    },
+    {
+      "destination": "native/windows-sandbox/src/proc_thread_attr.rs",
+      "upstream": [
+        {
+          "path": "codex-rs/windows-sandbox-rs/src/proc_thread_attr.rs",
+          "sha256": "bf846b5770b2e3eeabe43c000fd53e80da5c500dd82c85f3436f4db6ea57f3c8"
+        }
+      ],
+      "adapted_sha256": "7feaa523758b041774d93f338f5e4f5340998dc6f409acf4f02e8fc5dcdb927c"
+    },
+    {
+      "destination": "native/windows-sandbox/src/process.rs",
+      "upstream": [
+        {
+          "path": "codex-rs/windows-sandbox-rs/src/process.rs",
+          "sha256": "f60178bad6c9ec321bcda5c30780c576e81cb5a70fd708defe3919619501c035"
+        },
+        {
+          "path": "codex-rs/utils/pty/src/win/job.rs",
+          "sha256": "df54d9d966509871403c5237412a3c7ff17cbdb9766b9690438f27c3b683bdcf"
+        }
+      ],
+      "adapted_sha256": "e65ff0d1559cd411e2d9481ccee8a50540f3261386de771b79ffef1cf28ace78"
+    },
+    {
+      "destination": "native/windows-sandbox/src/protocol.rs",
+      "upstream": [],
+      "origin": "new product integration source",
+      "adapted_sha256": "dd3416dbca519b3aeb71ec48934cac8ea02fc5aa23dc859e95b4d343c02795a3"
+    },
+    {
+      "destination": "native/windows-sandbox/src/setup.rs",
+      "upstream": [],
+      "origin": "new product integration source",
+      "adapted_sha256": "94a1433c13ccf0d7aef2d2a62cde2dc989677996b7921e7e16d5376ef4321ef9"
+    },
+    {
+      "destination": "native/windows-sandbox/src/setup/accounts.rs",
+      "upstream": [
+        {
+          "path": "codex-rs/windows-sandbox-rs/src/setup_provisioning/sandbox_users.rs",
+          "sha256": "4abb21d18ed450b8fdb35fa246708cd8175b6f11dc11ceea381592d351bda1eb"
+        },
+        {
+          "path": "codex-rs/windows-sandbox-rs/src/winutil.rs",
+          "sha256": "5620770d64aee14ba9d6918822c858f1fceb308d97db53a86a97808adadf510b"
+        },
+        {
+          "path": "codex-rs/windows-sandbox-rs/src/identity.rs",
+          "sha256": "d9f4cc3d4de9c6a197f68558be87741cf8e0bd8e0b6499a580ce9f9961060649"
+        }
+      ],
+      "adapted_sha256": "b13fa10288e252e9a4287334a100328e220d26df49fbaff70b4aad39e6af3a3b"
+    },
+    {
+      "destination": "native/windows-sandbox/src/setup/dpapi.rs",
+      "upstream": [
+        {
+          "path": "codex-rs/windows-sandbox-rs/src/dpapi.rs",
+          "sha256": "e87a193e0d41b8d53da58d0390e302dc28c617cd437fbbfc86034838104de87d"
+        }
+      ],
+      "adapted_sha256": "320712156c565eb96465ac75c4486f302d45d6ea199a47d94b46f84c74d32a63"
+    },
+    {
+      "destination": "native/windows-sandbox/src/setup/launch.rs",
+      "upstream": [
+        {
+          "path": "codex-rs/windows-sandbox-rs/src/elevated/runner_client.rs",
+          "sha256": "bd8a1762e740eb348a2b6a44487103c576319e3dc41661b43105c1c4e734672a"
+        }
+      ],
+      "adapted_sha256": "20292cb9669a647d3bbb37ee5abfdea72ff4e45fc77f0c057d992432b4957cd6"
+    },
+    {
+      "destination": "native/windows-sandbox/src/setup/no_reparse_dir.rs",
+      "upstream": [
+        {
+          "path": "codex-rs/windows-sandbox-rs/src/no_reparse_dir.rs",
+          "sha256": "0a02113e1074799f803d32a6af174688cec2d95a0af2050ec28d5b8babc5ca18"
+        }
+      ],
+      "adapted_sha256": "d83ba625ef368394f4eb1ccc1f78e6c36f0f23db624734c3eafc1cbc1c0d103f"
+    },
+    {
+      "destination": "native/windows-sandbox/src/setup/no_reparse_dir_tests.rs",
+      "upstream": [
+        {
+          "path": "codex-rs/windows-sandbox-rs/src/no_reparse_dir_tests.rs",
+          "sha256": "1ba6183c368171a248c84b5b64469b890c946a322339cf379b975b0f9b3029f6"
+        }
+      ],
+      "adapted_sha256": "8942844279a40fafcd9b2ef035974046f9f5ec8daafde6ebebdefe724387084f"
+    },
+    {
+      "destination": "native/windows-sandbox/src/setup/store.rs",
+      "upstream": [],
+      "origin": "new product integration source",
+      "adapted_sha256": "9e5b864eb320c544ba77ae9686d5c62ba457cbecb23bd8caa4721569fe06541a"
+    },
+    {
+      "destination": "native/windows-sandbox/src/token.rs",
+      "upstream": [
+        {
+          "path": "codex-rs/windows-sandbox-rs/src/token.rs",
+          "sha256": "29b689c9c907e7895dca7cc69004d0393545a890a2787c12c488bab93a70409e"
+        }
+      ],
+      "adapted_sha256": "5cf5ec4c5b1d230130dd7809a0b2b6b1b12a44d9d6b46f975ae40e6dc29bf25f"
+    },
+    {
+      "destination": "native/windows-sandbox/src/token_groups_tests.rs",
+      "upstream": [
+        {
+          "path": "codex-rs/windows-sandbox-rs/src/token_groups_tests.rs",
+          "sha256": "b6d1c5a9fe979844ba3e5041c7d3dd27350e1c0ac6e53da3f65b4275daeff3d5"
+        }
+      ],
+      "adapted_sha256": "8393cf6d0a98eca0d65cdba19dbadd51846c8b8a3efa059bff7e42cd35a90a98"
+    },
+    {
+      "destination": "native/windows-sandbox/src/token_tests.rs",
+      "upstream": [
+        {
+          "path": "codex-rs/windows-sandbox-rs/src/token_tests.rs",
+          "sha256": "b17a125d62e2a761380cd94281661bc972bf04d84d1300990da387ebe4e7aaaf"
+        }
+      ],
+      "adapted_sha256": "b0125086c876bc85abaf4ba59fc27114aacbcc98294e4062f6dbbb414f6b0a41"
+    },
+    {
+      "destination": "native/windows-sandbox/src/token_user.rs",
+      "upstream": [
+        {
+          "path": "codex-rs/windows-sandbox-rs/src/token_user.rs",
+          "sha256": "b30ee9ce208175adf5d972abf45c825b33a1144933bb1a8c9e0dac728b5546c2"
+        }
+      ],
+      "adapted_sha256": "bbcd1a268c356773c755fe8f8e43cd5db6f9c244aeaffc926dc8eef92dec67b5"
+    },
+    {
+      "destination": "native/windows-sandbox/src/token_user_tests.rs",
+      "upstream": [
+        {
+          "path": "codex-rs/windows-sandbox-rs/src/token_user_tests.rs",
+          "sha256": "c349c191b30c72f210c6d90c26f40bdc9c50b48afba532582fc55b6e9bd573fd"
+        }
+      ],
+      "adapted_sha256": "43c0a8e953360d9ee1bdaf985c679b0d04bedd8712b467f78e9d3374faa4c969"
+    },
+    {
+      "destination": "native/windows-sandbox/src/winutil.rs",
+      "upstream": [
+        {
+          "path": "codex-rs/windows-sandbox-rs/src/winutil.rs",
+          "sha256": "5620770d64aee14ba9d6918822c858f1fceb308d97db53a86a97808adadf510b"
+        }
+      ],
+      "adapted_sha256": "2aa412d89bb7ff813861c1dc5a7f2374b80af43e6c8c365156b58428ae3f8d9f"
+    }
+  ]
+}

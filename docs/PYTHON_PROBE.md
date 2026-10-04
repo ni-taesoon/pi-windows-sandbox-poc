@@ -1,101 +1,54 @@
-# Python smoke probe: prepared, not Windows-validated
+# Python 샌드박스 검증 준비
 
-The standalone stdlib script is `scripts/python-sandbox-probe.py`. It has not been executed inside a Windows sandbox. Linux unit tests validate logic, mocks, and temporary benign file handling only. They do not validate Windows containment.
+스크립트: `scripts/python-sandbox-probe.py`.
+이 버전은 외부 Codex CLI를 사용하지 않습니다. 이전 버전의 Codex operator 설정이나 `--explicit-windows-experiment` 명령을 사용하지 마세요. 공개 native 실행 경로가 아직 차단되어 있어, Python을 샌드박스에서 실행한 결과는 없습니다.
 
-No provisioning or launch helper is added. `nativeEnforcement` remains false, and the normal broker still refuses this backend. Do not flip that flag to run the probe. Use only the existing explicit reference experiment below after operator approval and the prerequisites in [Windows validation](WINDOWS_VALIDATION.md) and the [backend README](../packages/codex-backend/README.md).
-
-## Prerequisites and authority
-
-Use a disposable isolated Windows test machine without an existing Codex installation or real work data. A trusted operator must approve possible account, password, ACL, service, firewall and UAC changes from Codex. The Python script makes none of those changes, but the Codex launcher may provision or repair state automatically. There is no verified no-provisioning switch.
-
-The operator supplies and reviews all absolute paths, Python interpreter and standard library, runtime configuration, environment, executable hashes/signatures, policy, test target address, and marker token. Use an absolute `python.exe`, never `python`, `py`, Windows Store aliases or PATH discovery. Keep Python, this script, application source, operator configuration and runtime installation outside sandbox write roots and protected from sandbox writes. Record Python's hash separately: the current backend's runtime verification covers its six known executables, not arbitrary Python runtimes. Do not add Python to that six-file manifest without reviewing its strict schema.
-
-Prepare two dedicated disposable test directories: an allowed workspace and a separate, non-overlapping denied-write fixture outside every writable root. Neither may be a real user-data or system directory. Do not use junctions, symlinks, reparse points, hardlinked markers or 8.3 aliases. The operator must prevent concurrent replacement of these paths throughout testing; metadata preflight is not race-free containment.
-
-1. Verify both directories exist on a writable volume and that the trusted host operator can exclusively create, read, and remove a uniquely named benign baseline file in each. Record this independently. Do not weaken sandbox ACLs to obtain a passing result.
-2. Generate a new lowercase canonical UUID, called TOKEN below. In the denied fixture create a new regular file named `pi-python-canary-TOKEN.marker`, using exclusive creation, with exactly these ASCII bytes (LF, not CRLF): `pi-python-sandbox-canary-v1\nTOKEN\n`. Do not overwrite any existing file. Leave this marker readable by the sandbox while denying writes to the fixture. The script only reads this bounded, explicitly identified benign marker; no existing user-file contents are read.
-3. If testing offline TCP, use only a controlled numeric IP and TCP port approved by the operator. Independently demonstrate that the listener is up and reachable from the host immediately before and after the run. Do not select an arbitrary Internet service. Omitting the target skips networking. The probe sends no application payload, though establishing a connection necessarily emits TCP traffic.
-4. If a prerequisite or approval is missing, stop. Do not run this probe directly on the host as a fallback or infer Windows results from Linux tests.
-
-## Create a request for the existing diagnostic CLI
-
-The following is an operator-reviewed Node ES module recipe to create a new request JSON, not an automatic provisioning script. Replace every placeholder with the approved test values. Save/run it from the repository root only after review. Keep the generated request in a trusted directory, never a sandbox-writable location. The operator-owned `operator.json` remains separate; it must contain the verified runtime and exact activation acknowledgement described in the backend README. Do not generate or fake activation approval from model input.
-
-```js
-import { writeFileSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
-import { createPolicy } from './packages/core/index.mjs';
-
-// Replace these placeholders; do not target actual user or system data.
-const workspace = String.raw`C:\APPROVED_TEST_WORKSPACE`;
-const denied = String.raw`C:\APPROVED_DEDICATED_CANARY`;
-const pythonExe = String.raw`C:\APPROVED_TRUSTED_PYTHON\python.exe`;
-const script = String.raw`C:\APPROVED_TRUSTED_POC\scripts\python-sandbox-probe.py`;
-const token = 'REPLACE_WITH_OPERATOR_MARKER_UUID';
-const requestPath = String.raw`C:\APPROVED_TRUSTED_CONFIG\python-request.json`;
-const policy = createPolicy({
-  policyId: randomUUID(), revision: 1,
-  ownerSid: 'REPLACE_WITH_VERIFIED_OPERATOR_SID',
-  installId: 'disposable-python-probe',
-  readMode: 'broadReadWithDeny',
-  writeRoots: [workspace], readDeny: [], writeDeny: [denied],
-  networkMode: 'offline', runtimeSetId: 'codex-0.160.0',
-  limits: { timeoutMs: 30000, maxOutputBytes: 65536 },
-  createdAt: new Date().toISOString(),
-  expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString()
-});
-const operation = {
-  kind: 'exec', executable: pythonExe,
-  argv: ['-I', '-B', script,
-    '--workspace', workspace,
-    '--denied-write-canary-dir', denied,
-    '--canary-token', token,
-    '--operator-approved-test-targets', '--cleanup-allowed'],
-  cwd: workspace, stdin: { mode: 'closed' }
-};
-// Optional: append only a reviewed controlled numeric address and listening port.
-// operation.argv.push('--network-host', APPROVED_IP, '--network-port', APPROVED_PORT);
-writeFileSync(requestPath, JSON.stringify({ policy, operation }, null, 2), { flag: 'wx' });
-```
-
-`-I` isolates Python from user site packages and Python environment injection; `-B` avoids bytecode writes. It does not itself create a security boundary. Ensure the approved runtime's TEMP/TMP point to a prepared location permitted by this policy and PATH contains only trusted entries; do not inject credentials or model API keys.
-
-Run from the repository root using the operator's absolute trusted Node executable and fully qualified configuration paths:
-
-```text
-C:\APPROVED_TRUSTED_NODE\node.exe packages/codex-backend/diagnose.mjs --explicit-windows-experiment C:\APPROVED_TRUSTED_CONFIG\operator.json C:\APPROVED_TRUSTED_CONFIG\python-request.json
-```
-
-The diagnostic's exact argv builder uses the pinned flattened Codex syntax:
-
-```text
-codex.exe -c windows.sandbox="elevated" -c prefer_mxc=false -c shell_environment_policy.inherit="all" sandbox --sandbox-state-json <compiled managed JSON> -- <absolute python.exe> -I -B <absolute script> <probe arguments>
-```
-
-Do not invoke that line directly to bypass the required supervisor. The existing diagnostic invokes the experimental supervisor and performs its fail-closed runtime/activation checks. Its stdout contains the Python JSON if Python actually starts; stderr contains separate launcher diagnostics and the experiment result. A setup failure, timeout, missing JSON, or termination before complete output is not a passing probe. Preserve both streams, launcher exit code, OS build, runtime hashes and observed identities as evidence.
-
-## Meaning of output
-
-Each check has `PASS`, `FAIL`, `INCONCLUSIVE` or `SKIP`. Overall status summarizes the checks that ran: a skipped network or lifetime check remains explicitly untested even if overall status is PASS. Exit codes are 0 for PASS/SKIP, 1 for FAIL, 2 for INCONCLUSIVE. Invalid CLI syntax also exits 2 through argparse.
-
-- Workspace PASS: a uniquely named, exclusively created benign file was written and read back. `--cleanup-allowed` removes only that run's allowed artifact, under the operator's no-concurrent-modification prerequisite.
-- Denied-write PASS: exclusive creation in the marked fixture returned an explicit permission error. Missing directories, unreadable/invalid markers, path collisions, a read-only-volume error, and unrelated failures are inconclusive. A missing/invalid marker prevents all probes. A successful denied creation is FAIL and leaves a uniquely named empty artifact for the operator to inspect/remove; the script never overwrites another file.
-- TCP PASS: the supplied target returned an explicit permission denial. Timeout, refusal, DNS-related failure and unreachable networks are INCONCLUSIVE, not evidence of offline enforcement. Numeric addresses avoid a DNS lookup entirely. Any successful connection is FAIL. An unrelated pre-existing firewall rule can also deny a connection, so attribution requires independent baseline/evidence.
-- Descendant lifetime is always SKIP. The probe creates no child and cannot attest its own termination. `nativeEnforcementAttested` and `cleanupVerified` remain false.
-
-A PASS is only a narrow observation against approved fixtures, not a global security certification or evidence that all reads, writes, IPC or network paths are contained. Failure should stop broader validation rather than trigger host execution or policy relaxation.
-
-## Separate lifetime procedure
-
-Follow the existing Windows validation matrix with an external trusted observer. Record the supervisor, runner, Python and any separately approved long-lived canary child's PID plus creation time and actual Job membership. Check normal completion, cancellation, timeout and parent crash independently, then verify from outside the sandbox that every recorded descendant is gone. PID-only checks can confuse PID reuse. Retain evidence; this script does not automate child spawning, process termination, or lifecycle attestation. The reference backend still reports cleanup unverified.
-
-## Safe local logic tests
-
-From repository root, on Linux or Windows:
+## 지금 실행 가능한 검사
 
 ```sh
 python3 -B scripts/python-sandbox-probe.py --self-test
 python3 -B -m unittest discover -s tests/python-probe -p 'test_*.py' -v
 ```
 
-Use the installed trusted interpreter's name/path for the local platform. These tests use mocks and temporary benign files, no actual network connections, Windows setup, ACL edits or sandbox execution. Sixteen tests passed on Linux during preparation on 2026-10-04. Actual Windows execution remains outstanding.
+이 검사는 로직, mock과 임시 시험 파일만 사용합니다. 실제 Windows 계정/ACL/방화벽을 바꾸거나 네트워크 시험을 하지 않습니다. `nativeEnforcementAttested`와 `cleanupVerified`는 false입니다.
+
+## 실제 실행의 전제
+
+신뢰되는 Windows 시험 담당자가 자체 Rust 실행기의 계정·권한·네트워크 준비와 라이브러리 통합을 먼저 검증해야 합니다. 관리자 보안 설정 변경은 명시적으로 승인받아야 합니다. 이 스크립트를 실행하려고 native 게이트를 임의로 true로 바꾸거나 호스트 Python으로 대체해서는 안 됩니다.
+
+시험용 Python 바이너리·표준 라이브러리·스크립트를 신뢰되는 읽기 전용 위치에 두고 절대 경로와 파일 hash를 기록합니다. 작업 폴더와 아래 canary 폴더는 업무 데이터가 없는 별도 임시 위치로 준비합니다.
+
+- 허용 workspace: 고유 시험 파일을 생성하고 읽어볼 곳
+- denied-write canary: workspace 및 모든 쓰기 허용 경로 바깥의 전용 시험 폴더
+- 두 경로는 겹치지 않고, 미리 존재하며, 정상 writable volume 위에 있어야 합니다.
+- 신뢰되는 호스트에서 각 경로에 고유 baseline 파일을 생성/읽기/삭제할 수 있음을 별도로 확인합니다.
+- 실제 사용자 문서·시스템 폴더를 거부 대상 fixture로 사용하지 않습니다.
+- symlink/junction/reparse point/하드링크 marker를 사용하지 않습니다. 시험 중 경로를 바꾸지 않습니다.
+
+담당자가 소문자 UUID `TOKEN`을 생성하고 denied fixture 안에 `pi-python-canary-TOKEN.marker`를 새로 만듭니다. 내용은 ASCII `pi-python-sandbox-canary-v1\nTOKEN\n`이며 줄바꿈은 LF입니다. 이미 있는 파일은 덮어쓰지 않습니다. marker는 읽을 수 있게 유지하면서 fixture의 쓰기를 차단해야 합니다.
+
+실제 native 통합이 검증된 후 전달할 Python 인수 형태는 다음과 같습니다. 이것은 실행 예시 계약이며 자동 실행 스크립트가 아닙니다.
+
+```text
+<검증된 python.exe> <보호된 python-sandbox-probe.py>
+  --workspace <허용된 시험 폴더>
+  --denied-write-canary-dir <별도 거부 시험 폴더>
+  --canary-token <TOKEN>
+  --operator-approved-test-targets
+  --cleanup-allowed
+```
+
+TCP 검사는 담당자가 통제하는 숫자 IP/포트를 `--network-host`, `--network-port`로 명시한 경우에만 수행합니다. 공급한 대상이 호스트에서는 실제로 연결되는지 직전 baseline을 확인해야 합니다. 기본값은 네트워크 SKIP입니다. 임의 인터넷 대상이나 개인정보를 전송하지 않으며 application payload를 보내지 않습니다.
+
+## 판정
+
+- 허용 쓰기 PASS: 고유 파일을 독점 생성하고 내용을 읽어 확인
+- 거부 쓰기 PASS: dedicated marker 확인 후 쓰기 시 명시적인 permission denial 관측
+- TCP PASS: 공급한 대상에서 명시적 permission denial 관측
+- timeout, connection refused, unreachable, 없는 경로 또는 확인 불가: INCONCLUSIVE
+- 금지 쓰기나 TCP 연결 성공: FAIL
+- 자식 프로세스 정리: 이 스크립트는 자식을 만들지 않으며 항상 SKIP. 외부 신뢰 관찰자가 별도로 확인
+
+전체 status의 PASS는 수행한 좁은 관측만 통과했다는 뜻입니다. 네트워크와 lifetime이 SKIP이면 검증하지 않은 것입니다. 기존 OS ACL/방화벽도 permission denial을 만들 수 있으므로 원인 판별에는 별도의 baseline/상태 증거가 필요합니다. 읽기 기밀성이나 전체 보안 경계를 인증하는 테스트가 아닙니다.
+
+허용 파일은 `--cleanup-allowed`일 때 해당 실행에서 만든 파일만 삭제합니다. 거부 쓰기가 예상과 달리 성공하면 빈 고유 파일을 남기고 FAIL을 반환하므로 담당자가 확인 후 정리합니다. 결과·로그에는 실제 비밀번호, API 키와 사용자 파일 내용을 넣지 않습니다.
