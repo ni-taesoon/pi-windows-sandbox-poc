@@ -86,3 +86,7 @@ python3 -B -m unittest discover -s tests/python-probe -p 'test_*.py' -v
 ## Windows 검증 준비
 
 [검증 준비 도구](docs/WINDOWS_LAB_PREPARATION.md)는 소스·빌드·증거 파일 hash와 미실행 시험 항목을 수집합니다. 프로세스 실행이나 보안 변경을 하지 않으며 실제 Windows 검증을 대체하지 않습니다. [리뷰 수정 증거](docs/REVIEW_FIX_EVIDENCE.md)와 함께 확인하세요.
+
+## 고정 Python 실측 드라이버
+
+[Windows Python lab](docs/WINDOWS_PYTHON_LAB.md)은 별도 수동 워크플로로 한정된 Python 파일 생성 시험을 수행하도록 구현되었습니다. Windows 실행 결과는 아직 없으며, 새 일회용 VM의 계정·ACL·방화벽/WFP 변경에 대한 명시적 승인이 필요합니다. production gate는 계속 false입니다.

@@ -67,3 +67,11 @@ Dependencies come from crates.io and are captured in the standalone Cargo.lock.
   product additions. Windows tests were compiled, not executed; see
   `docs/REVIEW_FIX_EVIDENCE.md` for the distinction between real JS, modeled property
   validation, source assertions and unexecuted Windows tests.
+
+## Fixed Python lab additions (2026-10-04)
+
+New lab-only example, staging script, workflow and source-contract tests compose
+the existing primitives without opening the public run endpoint. Derived firewall/WFP
+modules add read-only exact configuration inspection and fresh-namespace checks.
+The Windows ToolHelp feature supports independent process observations.
+Source/contract checks and Windows cross-compilation are not native runtime proof.

@@ -1,0 +1,64 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running unittests src/lib.rs (native/windows-sandbox/target/debug/deps/pi_windows_sandbox-dbc474577ed82c26)
+
+running 28 tests
+test firewall_scope::tests::rejects_unexpected_action ... ok
+test firewall_scope::tests::accepts_exact_readback ... ok
+test firewall_scope::tests::rejects_unexpected_application ... ok
+test firewall_scope::tests::rejects_unexpected_description ... ok
+test firewall_scope::tests::rejects_unexpected_direction ... ok
+test firewall_scope::tests::rejects_unexpected_edge_traversal ... ok
+test firewall_scope::tests::rejects_unexpected_interface_types ... ok
+test firewall_scope::tests::rejects_unexpected_enabled ... ok
+test firewall_scope::tests::rejects_unexpected_interfaces_empty ... ok
+test firewall_scope::tests::rejects_unexpected_local_addresses ... ok
+test firewall_scope::tests::rejects_unexpected_local_ports ... ok
+test firewall_scope::tests::rejects_unexpected_name ... ok
+test firewall_scope::tests::rejects_unexpected_profiles ... ok
+test firewall_scope::tests::rejects_unexpected_owner ... ok
+test firewall_scope::tests::rejects_unexpected_remote_addresses ... ok
+test firewall_scope::tests::rejects_unexpected_remote_ports ... ok
+test firewall_scope::tests::rejects_unexpected_remote_machine ... ok
+test firewall_scope::tests::rejects_unexpected_package ... ok
+test firewall_scope::tests::rejects_unexpected_remote_user ... ok
+test firewall_scope::tests::rejects_unexpected_user ... ok
+test firewall_scope::tests::rejects_unexpected_secure_flags ... ok
+test protocol::tests::production_gate_is_closed ... ok
+test protocol::tests::bounded_request_validation ... ok
+test policy_masks::tests::deny_write_does_not_deny_shared_read_rights ... ok
+test protocol::tests::unknown_fields_rejected ... ok
+test firewall_scope::tests::rejects_unexpected_protocol ... ok
+test protocol::tests::stop_reasons_are_explicit ... ok
+test firewall_scope::tests::rejects_unexpected_service ... ok
+
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (native/windows-sandbox/target/debug/deps/pi_windows_sandbox-8f8178292b177dd2)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/broker_wait_contract.rs (native/windows-sandbox/target/debug/deps/broker_wait_contract-15626d02e49faf3f)
+
+running 2 tests
+test dedicated_helper_uses_transferred_wait_handle_not_cross_account_open ... ok
+test handoff_is_wait_only_noninheritable_and_precedes_admission_and_resume ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/python_lab_contract.rs (native/windows-sandbox/target/debug/deps/python_lab_contract-f88b7be9f1b3a630)
+
+running 3 tests
+test staging_requires_explicit_scope_and_hashes ... ok
+test production_gate_and_fixed_lab_surface_remain_separate ... ok
+test native_evidence_is_required_before_narrow_pass ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests pi_windows_sandbox
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

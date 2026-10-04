@@ -1,0 +1,1 @@
+PASS: YAML parsed; manual-only trigger; default-false approval; contents:read; windows-2022 30-minute job; all actions full SHA pinned; nonhidden artifact paths explicit non-store allowlist; final disable status recorded. Static validation only, not Windows execution.

@@ -1,0 +1,156 @@
+name: Windows fixed Python lab (security changes)
+
+# Manual ONLY. Never add push/pull_request/workflow_run triggers to this workflow.
+# The checkbox is an operator attestation, not a substitute for action-time approval.
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: 'Reviewed full lowercase 40-character source commit SHA'
+        required: true
+        type: string
+      approved_security_changes:
+        description: 'Explicitly approved fresh win22 VM: PiSandboxOffline, C:\PiSandboxLab ACL/store, product firewall/WFP, fixed Python, disable/dispose'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  fixed-python-lab:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_TERM_COLOR: never
+      RUST_BACKTRACE: '1'
+      PYTHONUTF8: '1'
+    steps:
+      - name: Require exact source and action-time security approval
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          APPROVED_SECURITY_CHANGES: ${{ inputs.approved_security_changes }}
+        run: |
+          if ($env:SOURCE_SHA -cnotmatch '^[0-9a-f]{40}$') { throw 'A full immutable reviewed source SHA is required.' }
+          if ($env:APPROVED_SECURITY_CHANGES -cne 'true') { throw 'Security-change approval absent; no lab work permitted.' }
+          if ($env:ImageOS -ne 'win22') { throw 'Only fresh Windows Server 2022 hosted runners are in scope.' }
+          # Preserve frozen manifest bytes during the first checkout on Windows.
+          git config --global core.autocrlf false
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot disable checkout newline conversion.' }
+          git config --global core.eol lf
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot select byte-stable checkout line endings.' }
+      - name: Check out reviewed source without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify immutable checkout
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          $actual = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $actual -cne $env:SOURCE_SHA) { throw 'Source identity mismatch.' }
+          New-Item -ItemType Directory -Path lab-evidence | Out-Null
+          $actual | Set-Content lab-evidence/source-commit.txt
+      - name: Select official Python runtime
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - name: Verify frozen source manifest
+        run: |
+          python -c "from pathlib import Path; from scripts.collect_windows_lab import source_identity; identity=source_identity(Path.cwd()); assert identity['allListedFilesMatch'] and identity['nativeFalseDeclarationObserved'], 'source manifest or production gate mismatch'; print(identity['manifestSha256'])"
+          if ($LASTEXITCODE -ne 0) { throw 'Frozen source verification failed.' }
+          Copy-Item -LiteralPath SOURCE_SHA256SUMS.txt -Destination lab-evidence/SOURCE_SHA256SUMS.txt
+      - name: Build reviewed helper and fixed lab driver with official MSVC toolchain
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          rustup toolchain install stable --profile minimal --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw 'Official Rust toolchain setup failed.' }
+          rustup run stable rustc --version --verbose | Tee-Object -FilePath lab-evidence/toolchain.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain unavailable.' }
+          rustup run stable cargo build --locked --target x86_64-pc-windows-msvc --manifest-path native/windows-sandbox/Cargo.toml --bin pi-windows-sandbox --example python_lab 2>&1 | Tee-Object -FilePath lab-evidence/build.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native build/link failed; no launch.' }
+          $build = "$PWD/native/windows-sandbox/target/x86_64-pc-windows-msvc/debug"
+          [ordered]@{
+            sourceCommit = $env:SOURCE_SHA
+            sourceManifestSha256 = (Get-FileHash SOURCE_SHA256SUMS.txt -Algorithm SHA256).Hash
+            lockfileSha256 = (Get-FileHash native/windows-sandbox/Cargo.lock -Algorithm SHA256).Hash
+            driverSha256 = (Get-FileHash "$build/examples/python_lab.exe" -Algorithm SHA256).Hash
+            helperSha256 = (Get-FileHash "$build/pi-windows-sandbox.exe" -Algorithm SHA256).Hash
+            pythonSha256 = (Get-FileHash "$env:pythonLocation/python.exe" -Algorithm SHA256).Hash
+            provenance = 'Trusted pinned-source build and official setup-python runtime; hashes do not independently prove compiler or package provenance.'
+          } | ConvertTo-Json | Set-Content lab-evidence/build-identity.json
+      - name: Stage fixed protected synthetic lab
+        id: stage
+        run: |
+          $identity = Get-Content lab-evidence/build-identity.json -Raw | ConvertFrom-Json
+          ./scripts/stage_windows_python_lab.ps1 -Phase Stage -ApprovedDisposableVm `
+            -PythonHome $env:pythonLocation -BuildDirectory "$PWD/native/windows-sandbox/target/x86_64-pc-windows-msvc/debug" `
+            -ExpectedDriverSha256 $identity.driverSha256 -ExpectedHelperSha256 $identity.helperSha256 `
+            -ExpectedPythonSha256 $identity.pythonSha256 -ApprovedSourceSha256 $identity.sourceManifestSha256 2>&1 | Tee-Object -FilePath lab-evidence/stage.log
+      - name: Approved fresh account and product offline protection setup
+        id: setup
+        run: |
+          ./scripts/stage_windows_python_lab.ps1 -Phase Setup -ApprovedDisposableVm 2>&1 | Tee-Object -FilePath lab-evidence/setup.log
+      - name: Execute exactly one fixed Python fixture through dedicated-account broker
+        id: run
+        run: |
+          ./scripts/stage_windows_python_lab.ps1 -Phase Run -ApprovedDisposableVm 2>&1 | Tee-Object -FilePath lab-evidence/run.log
+      - name: Always attempt owned-account disable after setup attempt
+        id: disable
+        if: ${{ always() && steps.stage.outcome == 'success' && steps.setup.outcome != 'skipped' }}
+        run: |
+          # No deletion, namespace replacement, system ACL changes or host fallback.
+          # Authenticated store determines the owned SID. Failure remains a failure.
+          ./scripts/stage_windows_python_lab.ps1 -Phase Disable -ApprovedDisposableVm 2>&1 | Tee-Object -FilePath lab-evidence/disable.log
+      - name: Collect only explicitly allowlisted non-secret evidence
+        if: ${{ always() && steps.stage.outcome == 'success' }}
+        env:
+          FINAL_DISABLE_OUTCOME: ${{ steps.disable.outcome }}
+        run: |
+          foreach ($name in @('stage-evidence.json','baseline.json','run-evidence.json','recovery-evidence.json','result-evidence.json','summary-evidence.json')) {
+            $source = Join-Path 'C:\PiSandboxLab\trusted' $name
+            if (Test-Path -LiteralPath $source -PathType Leaf) {
+              if ((Get-Item -LiteralPath $source).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Evidence reparse refused.' }
+              Copy-Item -LiteralPath $source -Destination (Join-Path 'lab-evidence' $name)
+            }
+          }
+          "Final explicit disable step: $env:FINAL_DISABLE_OUTCOME. A failure requires investigation/disposal even if Python was previously observed." | Add-Content $env:GITHUB_STEP_SUMMARY
+          if (Test-Path -LiteralPath 'lab-evidence/summary-evidence.json') {
+            $summary = Get-Content lab-evidence/summary-evidence.json -Raw | ConvertFrom-Json
+            "Python observation status: $($summary.status); account disabled: $($summary.accountDisabled); output SHA256: $($summary.outputSha256)" | Add-Content $env:GITHUB_STEP_SUMMARY
+          } else {
+            'No LAB_SMOKE_PASS evidence was produced. Inspect the failing step and named logs.' | Add-Content $env:GITHUB_STEP_SUMMARY
+          }
+          'LAB ONLY. Production activation stays false. No adversarial deny/escape/network validation. Fresh hosted VM must be disposed by job teardown; no reuse or automatic retry.' | Add-Content $env:GITHUB_STEP_SUMMARY
+      - name: Retain named safe evidence (never the credential store or root)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2, verified official release
+        with:
+          name: windows-fixed-python-lab-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: warn
+          include-hidden-files: false
+          path: |
+            lab-evidence/source-commit.txt
+            lab-evidence/SOURCE_SHA256SUMS.txt
+            lab-evidence/toolchain.txt
+            lab-evidence/build.log
+            lab-evidence/build-identity.json
+            lab-evidence/stage.log
+            lab-evidence/setup.log
+            lab-evidence/run.log
+            lab-evidence/disable.log
+            lab-evidence/stage-evidence.json
+            lab-evidence/baseline.json
+            lab-evidence/run-evidence.json
+            lab-evidence/recovery-evidence.json
+            lab-evidence/result-evidence.json
+            lab-evidence/summary-evidence.json
