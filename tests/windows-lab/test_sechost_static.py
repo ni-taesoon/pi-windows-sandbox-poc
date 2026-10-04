@@ -5,7 +5,7 @@ import unittest
 import json
 import struct
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
-from sechost_structure import summarize, rip_indirect_slot, initializer_table
+from sechost_structure import summarize, rip_indirect_slot, initializer_table, focused_roots, BCRYPT_IMAGE_HASH, BCRYPT_INIT_ROOTS
 
 spec = importlib.util.spec_from_file_location('static_probe', Path(__file__).resolve().parents[2] / 'scripts/inspect_sechost_static.py')
 module = importlib.util.module_from_spec(spec)
@@ -117,6 +117,15 @@ class InitializerTests(unittest.TestCase):
         code = bytearray(self.code());code[9]=0x15
         with self.assertRaises(ValueError): initializer_table(bytes(code),0x1000,0x180000000,0x2000,lambda r,n:b'\0'*8,lambda r:True)
         with self.assertRaises(ValueError): initializer_table(self.code(),0x1000,0x180000000,0x2000,lambda r,n:struct.pack('<Q',1),lambda r:True)
+
+class FocusTests(unittest.TestCase):
+    def edges(self):
+        return [(0xa590,0x584c)]+[(0x584c,rva) for rva in BCRYPT_INIT_ROOTS[1:]]
+    def test_exact_hash_and_known_call_chain_only(self):
+        self.assertEqual(focused_roots(BCRYPT_IMAGE_HASH,0xa590,self.edges(),lambda r:True),list(BCRYPT_INIT_ROOTS))
+        self.assertEqual(focused_roots('0'*64,0xa590,self.edges(),lambda r:True),[])
+        self.assertEqual(focused_roots(BCRYPT_IMAGE_HASH,0xa590,self.edges()[:-1],lambda r:True),[])
+        self.assertEqual(focused_roots(BCRYPT_IMAGE_HASH,0xa590,self.edges(),lambda r:r!=0x8a50),[])
 
 if __name__ == '__main__':
     unittest.main()

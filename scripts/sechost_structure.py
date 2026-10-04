@@ -1,5 +1,6 @@
 """Reduce bounded PE/disassembler input to entry-reachable control-flow facts."""
 import bisect
+import hashlib
 import re
 import struct
 
@@ -50,6 +51,19 @@ def initializer_table(code, start_rva, base, image_size, read_rva, executable):
             raise ValueError('initializer_pointer_bounds')
         entries.append({'slotRva':slot,'functionRva':rva})
     return {'startRva':begin,'endRva':end,'entries':entries}
+
+
+BCRYPT_IMAGE_HASH = '663ac06ba31380fb8a9d096fa8d40df529e0461ccf6d469ab5d858c724dbafbb'
+BCRYPT_INIT_ROOTS = (0x584c,0x8ae4,0x8a98,0x5a18,0x8a50,0x58fc)
+
+def focused_roots(image_hash, entry, direct_edges, executable):
+    if image_hash != BCRYPT_IMAGE_HASH:
+        return []
+    edges = set(direct_edges)
+    expected = [(entry,BCRYPT_INIT_ROOTS[0])]+[(BCRYPT_INIT_ROOTS[0],rva) for rva in BCRYPT_INIT_ROOTS[1:]]
+    if not all(edge in edges for edge in expected) or not all(executable(rva) for rva in BCRYPT_INIT_ROOTS):
+        return []
+    return list(BCRYPT_INIT_ROOTS)
 
 
 def summarize(image, text):
@@ -186,8 +200,22 @@ def summarize(image, text):
         except ValueError:
             pass
         tables.append(record)
+    # These six fixed call sites come from the preceding sanitized graph. Validate
+    # actual E8 bytes and the expected target, never accept arbitrary text roots.
+    focus_edges = []
+    for owner,call,target in [(entry,0xa612,0x584c),(0x584c,0x5860,0x8ae4),(0x584c,0x587a,0x8a98),(0x584c,0x58a4,0x5a18),(0x584c,0x58a9,0x8a50),(0x584c,0x58c1,0x58fc)]:
+        if call not in instructions or instructions[call][:3] != ('call',target,False):
+            continue
+        try:
+            at = offset(call,5)
+            if image[at] == 0xe8 and call+5+struct.unpack_from('<i',image,at+1)[0] == target:
+                focus_edges.append((owner,target))
+        except ValueError:
+            pass
+    priority = focused_roots(hashlib.sha256(image).hexdigest(),entry,focus_edges,
+        lambda r:any(start <= r < start+size for start,size in executable_sections))
     positions = sorted(instructions)
-    functions = [entry]+initializer_functions
+    functions = [entry]+priority+initializer_functions
     seen_functions = set()
     summaries = []
     total_visited = 0
@@ -244,6 +272,6 @@ def summarize(image, text):
         functions.extend(x for x in callees if x not in seen_functions and x not in functions)
     first = summaries[0]
     return {'entryRva':entry,'facts':first['facts'],'entryTruncated':first['truncated'],
-            'calleeSummaries':summaries[1:],'initializerTables':tables,'importSlots':len(imports),
+            'calleeSummaries':summaries[1:],'bcryptInitPriorityApplied':bool(priority),'initializerTables':tables,'importSlots':len(imports),
             'visitedInstructions':total_visited,'truncated':bool(functions) or any(x['truncated'] for x in summaries),
             'limitation':'Entry-first heuristic static closure and up to seven direct-callee summaries; branch alternatives, parsing gaps, indirect calls and bounds prevent identifying the executed failure branch.'}
