@@ -578,3 +578,18 @@ test("read content over decoded byte budget fails without truncating JSON", asyn
   assert.equal(result.error.code, "OUTPUT_LIMIT");
   assert.equal(result.data, undefined);
 });
+
+test("file operation errors require confirmed termination; unknown failures remain blocked", async () => {
+  for (const [code, terminated, expected, state] of [
+    ["FILE_OPERATION_FAILED", true, "FILE_OPERATION_FAILED", "SESSION_ACTIVE"],
+    ["FILE_OPERATION_FAILED", false, "CLEANUP_UNCONFIRMED", "BLOCKED"],
+    ["UNRECOGNIZED_WORKER_ERROR", true, "BROKER_LOST", "BLOCKED"],
+  ]) {
+    const { backend, broker, request } = await fixture();
+    backend.run = async () => ({ terminated, error: { code } });
+    const result = await broker.execute(request);
+    assert.equal(result.error.code, expected);
+    assert.equal(result.outcome, state === "BLOCKED" ? "unknown" : "error");
+    assert.equal(broker.getStatus().state, state);
+  }
+});

@@ -116,7 +116,7 @@ export function createSandboxTools(broker, binding) {
       description:
         name === "bash"
           ? "Unavailable: Bash is unsupported by this Windows sandbox. Use powershell explicitly."
-          : `Broker-only ${name}. Paths and execution are checked against the prepared policy. Read offsets/lengths are bytes; edit requires expectedHash.`,
+          : `Broker-only ${name}. Paths and execution are checked against the prepared policy. Read offsets/lengths are bytes; use returned encoding metadata (base64 for non-UTF-8 ranges); edit requires expectedHash.`,
       parameters: structuredClone(specs[name]),
       executionMode: "sequential",
       async execute(_toolCallId, args, signal) {

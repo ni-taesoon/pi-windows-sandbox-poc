@@ -36,7 +36,7 @@ listed third-party components are included in this extraction.
 - `network/firewall`: standalone firewall source, all-profile enabled checks,
   product-owned rule identities; proxy relaxations removed.
 - `network/wfp` and filter specs: offline-only source, product-owned provider/sublayer/
-  filter GUIDs, upstream IPv4/IPv6 connect/listen/receive/resource-assignment coverage.
+  filter GUIDs, IPv4/IPv6 AUTH_CONNECT and RESOURCE_ASSIGNMENT filters (not separate listen/receive layers).
 - New `admission`: staged trusted library composition, pinned-handle account/capability
   ACLs serialized by a global product account lease, capability-only token/private
   desktop/job chain and fail-safe cleanup. Narrow write-deny masks exclude common
@@ -55,3 +55,15 @@ listed third-party components are included in this extraction.
 Source reuse is not a claim of equivalent security or compatibility. Integration and
 Windows validation remain incomplete; production entrypoint stays fail-closed.
 Dependencies come from crates.io and are captured in the standalone Cargo.lock.
+
+## Review fixes (2026-10-04)
+
+- Firewall rule readback now uses a new portable complete-scope validator. Existing
+  mismatched rules are rejected without mutation; new selectors are explicitly set.
+- Broker transfers a noninheritable SYNCHRONIZE-only process handle to its protected
+  helper. The helper duplicates the received local handle and runs through a borrowed
+  parent-handle path; no cross-account PID reopen is required in that path.
+- New portable/source-contract regression tests and Windows-only handle tests are
+  product additions. Windows tests were compiled, not executed; see
+  `docs/REVIEW_FIX_EVIDENCE.md` for the distinction between real JS, modeled property
+  validation, source assertions and unexecuted Windows tests.

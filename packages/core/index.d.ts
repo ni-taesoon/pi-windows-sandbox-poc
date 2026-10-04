@@ -77,6 +77,7 @@ export interface ExecuteRequest {
   operation: Operation;
 }
 export interface ReadData {
+  /** Actual content encoding: UTF-8 requests may return base64 for byte-split or invalid UTF-8 ranges. */
   encoding: "utf8" | "base64";
   content: string;
   eof: boolean;

@@ -9,7 +9,7 @@ use std::ffi::c_void;
 use std::ptr::{null, null_mut};
 use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::*;
-use windows_sys::Win32::Storage::FileSystem::{ReadFile, WriteFile};
+use windows_sys::Win32::Storage::FileSystem::{ReadFile, WriteFile, SYNCHRONIZE};
 use windows_sys::Win32::System::JobObjects::*;
 use windows_sys::Win32::System::Pipes::{CreatePipe, PeekNamedPipe};
 use windows_sys::Win32::System::Threading::*;
@@ -148,6 +148,22 @@ pub unsafe fn run_restricted(
     request: &RunRequest,
 ) -> Result<RunResult> {
     request.validate()?;
+    let parent = Handle::from_raw(OpenProcess(SYNCHRONIZE, 0, request.parent_pid))?;
+    run_restricted_with_parent(token, private_desktop, request, &parent)
+}
+
+/// Handle-based primitive for the dedicated helper: no cross-account OpenProcess.
+/// # Safety
+/// All run_restricted prerequisites apply. `parent` must reference the authenticated
+/// broker process with SYNCHRONIZE rights and remain alive through this call.
+/// The caller retains ownership; this function never closes the borrowed handle.
+pub(crate) unsafe fn run_restricted_with_parent(
+    token: HANDLE,
+    private_desktop: &str,
+    request: &RunRequest,
+    parent: &Handle,
+) -> Result<RunResult> {
+    request.validate()?;
     ensure!(token != 0 && token != INVALID_HANDLE_VALUE, "invalid token");
     ensure!(
         private_desktop
@@ -163,7 +179,6 @@ pub unsafe fn run_restricted(
         std::path::Path::new(&request.cwd).is_absolute(),
         "absolute cwd required"
     );
-    let parent = Handle::from_raw(OpenProcess(0x0010_0000, 0, request.parent_pid))?;
     ensure!(
         WaitForSingleObject(parent.raw(), 0) == WAIT_TIMEOUT,
         "parent not alive"

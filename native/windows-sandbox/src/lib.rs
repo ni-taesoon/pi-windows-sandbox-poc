@@ -25,3 +25,7 @@ pub mod token;
 mod token_user;
 #[cfg(windows)]
 pub mod winutil;
+
+#[cfg(any(windows, test))]
+#[path = "network/firewall_scope.rs"]
+mod firewall_scope;

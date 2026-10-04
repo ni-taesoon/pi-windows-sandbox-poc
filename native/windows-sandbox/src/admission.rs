@@ -441,8 +441,9 @@ impl AdmittedLaunch {
                 )?;
         self.finish_after_verified_cleanup(result)
     }
-    pub(crate) fn helper_payload(&self) -> crate::broker::HelperPayload {
+    pub(crate) fn helper_payload(&self, parent_wait_handle: u64) -> crate::broker::HelperPayload {
         crate::broker::HelperPayload {
+            parent_wait_handle,
             request: self.request.clone(),
             capability_sid: self.capability_string.clone(),
             private_desktop: self.desktop.name().to_owned(),

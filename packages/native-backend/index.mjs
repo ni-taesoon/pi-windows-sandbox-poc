@@ -440,18 +440,21 @@ export function spawnNative(
               finish({ ...terminal, error: { code: "OUTPUT_LIMIT" } });
               return;
             }
-            const encoding = invocation.fileOperation.encoding;
-            data = {
-              ...data,
-              encoding,
-              content:
-                encoding === "base64"
-                  ? data.content
-                  : new TextDecoder("utf-8", {
-                      fatal: true,
-                      ignoreBOM: true,
-                    }).decode(content),
-            };
+            // Offsets and limits are bytes, so a valid file can yield a range
+            // starting/ending inside a UTF-8 code point. Preserve the exact range
+            // as base64 when it cannot be decoded losslessly; never replace,
+            // drop, or read past those bytes to manufacture valid text.
+            if (invocation.fileOperation.encoding === "utf8") {
+              try {
+                const text = new TextDecoder("utf-8", {
+                  fatal: true,
+                  ignoreBOM: true,
+                }).decode(content);
+                data = { ...data, encoding: "utf8", content: text };
+              } catch {
+                data = { ...data, encoding: "base64" };
+              }
+            }
           }
           finish({ ...terminal, data });
           return;

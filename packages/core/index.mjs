@@ -26,6 +26,7 @@ export const ERROR_CODES = Object.freeze([
   "BROKER_LOST",
   "CLEANUP_UNCONFIRMED",
   "FILE_CONFLICT",
+  "FILE_OPERATION_FAILED",
 ]);
 export class SandboxError extends Error {
   constructor(code, message) {
@@ -702,6 +703,7 @@ export class SandboxBroker {
       const safeCodes = [
         "POLICY_DENIED",
         "FILE_CONFLICT",
+        "FILE_OPERATION_FAILED",
         "TIMEOUT",
         "CANCELLED",
         "OUTPUT_LIMIT",

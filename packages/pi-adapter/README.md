@@ -36,14 +36,14 @@ Use an approved workspace directory as `workspaceCwd`; the host supplies this se
 
 ## Tool differences and errors
 
-- `read`: path plus optional **byte** offset/length, UTF-8 result metadata including hash when available. Does not implement Pi's line-based pagination or image resizing.
+- `read`: path plus optional **byte** offset/length, UTF-8 preferred, with actual result `encoding` metadata and hash when available. A range that splits a multibyte character or contains invalid UTF-8 returns lossless `base64` instead. Decode each range using its returned encoding; concatenate decoded bytes before interpreting text across chunks. Offsets, length limits and EOF keep their byte meanings; no replacement characters, dropped bytes or expanded ranges. Does not implement Pi's line-based pagination or image resizing.
 - `write`: path/content and required mode (`create` or `replace`), optional expectedHash.
 - `edit`: exact oldText/newText and required expectedHash. The broker/backend must enforce conflict handling; this PoC uses an optimistic expectedHash check and does not protect against concurrent uncooperative writers. This is not atomic compare-and-edit. The adapter never reads first on the host.
 - `powershell`: command plus optional timeoutMs/maxOutputBytes. Explicit PowerShell semantics only; no per-call cwd/env authority.
 - `bash`: always throws UNSUPPORTED before dispatch. No Bash-to-PowerShell translation or host fallback.
 - `grep`, `find`, `ls`, arbitrary extension tools: absent from the SDK registry allowlist.
 
-Adapter errors reject the tool promise so Pi records an error. Outcome `unknown` never becomes success and is not automatically retried. AbortSignal triggers broker cancellation for the exact request ID and waits for the broker's execution result. Cancellation is not a guarantee that prior writes were undone. Final result binding is checked against request, session, and policy. Resource and output caps remain broker-enforced.
+Adapter errors reject the tool promise so Pi records an error. Ordinary worker failures such as missing files or invalid UTF-8 edits return `FILE_OPERATION_FAILED` after confirmed termination and leave the session usable. A failed write may have partially changed a file; this error does not promise rollback. Unknown transport failures and unverified cleanup still block the broker. Outcome `unknown` never becomes success and is not automatically retried. AbortSignal triggers broker cancellation for the exact request ID and waits for the broker's execution result. Cancellation is not a guarantee that prior writes were undone. Final result binding is checked against request, session, and policy. Resource and output caps remain broker-enforced.
 
 ## Tests
 

@@ -1,0 +1,166 @@
+
+running 23 tests
+test tests::accepts_exact_readback ... ok
+test tests::rejects_unexpected_action ... FAILED
+test tests::rejects_unexpected_application ... FAILED
+test tests::rejects_unexpected_direction ... FAILED
+test tests::rejects_unexpected_description ... FAILED
+test tests::rejects_unexpected_edge_traversal ... FAILED
+test tests::rejects_unexpected_enabled ... FAILED
+test tests::rejects_unexpected_interface_types ... FAILED
+test tests::rejects_unexpected_interfaces_empty ... FAILED
+test tests::rejects_unexpected_local_addresses ... FAILED
+test tests::rejects_unexpected_name ... FAILED
+test tests::rejects_unexpected_local_ports ... FAILED
+test tests::rejects_unexpected_owner ... FAILED
+test tests::rejects_unexpected_profiles ... FAILED
+test tests::rejects_unexpected_protocol ... FAILED
+test tests::rejects_unexpected_remote_ports ... FAILED
+test tests::rejects_unexpected_remote_addresses ... FAILED
+test tests::rejects_unexpected_service ... FAILED
+test tests::rejects_unexpected_secure_flags ... FAILED
+test tests::rejects_unexpected_user ... FAILED
+test tests::rejects_unexpected_package ... FAILED
+test tests::rejects_unexpected_remote_user ... FAILED
+test tests::rejects_unexpected_remote_machine ... FAILED
+
+failures:
+
+---- tests::rejects_unexpected_action stdout ----
+
+thread 'tests::rejects_unexpected_action' (36) panicked at <workspace>/review-fix-evidence/firewall/firewall_scope.red.rs:177:9:
+accepted unexpected action: RuleScope { name: "pi_sandbox_offline_block_loopback_tcp", description: "Pi Sandbox Offline - Block Loopback TCP", direction: 2, protocol: 6, action: 1, enabled: true, profiles: 2147483647, user: "O:LSD:(A;;CC;;;S-1-5-21-1001)", application: "", service: "", local_addresses: "*", remote_addresses: "127.0.0.0/8,::/127", local_ports: "*", remote_ports: "*", interfaces_empty: true, interface_types: "All", package: "", owner: "", remote_user: "", remote_machine: "", secure_flags: 0, edge_traversal: 0 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- tests::rejects_unexpected_application stdout ----
+
+thread 'tests::rejects_unexpected_application' (37) panicked at <workspace>/review-fix-evidence/firewall/firewall_scope.red.rs:65:9:
+accepted unexpected application: RuleScope { name: "pi_sandbox_offline_block_loopback_tcp", description: "Pi Sandbox Offline - Block Loopback TCP", direction: 2, protocol: 6, action: 0, enabled: true, profiles: 2147483647, user: "O:LSD:(A;;CC;;;S-1-5-21-1001)", application: "C:\\only-one.exe", service: "", local_addresses: "*", remote_addresses: "127.0.0.0/8,::/127", local_ports: "*", remote_ports: "*", interfaces_empty: true, interface_types: "All", package: "", owner: "", remote_user: "", remote_machine: "", secure_flags: 0, edge_traversal: 0 }
+
+---- tests::rejects_unexpected_direction stdout ----
+
+thread 'tests::rejects_unexpected_direction' (39) panicked at <workspace>/review-fix-evidence/firewall/firewall_scope.red.rs:193:9:
+accepted unexpected direction: RuleScope { name: "pi_sandbox_offline_block_loopback_tcp", description: "Pi Sandbox Offline - Block Loopback TCP", direction: 1, protocol: 6, action: 0, enabled: true, profiles: 2147483647, user: "O:LSD:(A;;CC;;;S-1-5-21-1001)", application: "", service: "", local_addresses: "*", remote_addresses: "127.0.0.0/8,::/127", local_ports: "*", remote_ports: "*", interfaces_empty: true, interface_types: "All", package: "", owner: "", remote_user: "", remote_machine: "", secure_flags: 0, edge_traversal: 0 }
+
+---- tests::rejects_unexpected_description stdout ----
+
+thread 'tests::rejects_unexpected_description' (38) panicked at <workspace>/review-fix-evidence/firewall/firewall_scope.red.rs:217:9:
+accepted unexpected description: RuleScope { name: "pi_sandbox_offline_block_loopback_tcp", description: "Unrelated owner rule", direction: 2, protocol: 6, action: 0, enabled: true, profiles: 2147483647, user: "O:LSD:(A;;CC;;;S-1-5-21-1001)", application: "", service: "", local_addresses: "*", remote_addresses: "127.0.0.0/8,::/127", local_ports: "*", remote_ports: "*", interfaces_empty: true, interface_types: "All", package: "", owner: "", remote_user: "", remote_machine: "", secure_flags: 0, edge_traversal: 0 }
+
+---- tests::rejects_unexpected_edge_traversal stdout ----
+
+thread 'tests::rejects_unexpected_edge_traversal' (40) panicked at <workspace>/review-fix-evidence/firewall/firewall_scope.red.rs:161:9:
+accepted unexpected edge_traversal: RuleScope { name: "pi_sandbox_offline_block_loopback_tcp", description: "Pi Sandbox Offline - Block Loopback TCP", direction: 2, protocol: 6, action: 0, enabled: true, profiles: 2147483647, user: "O:LSD:(A;;CC;;;S-1-5-21-1001)", application: "", service: "", local_addresses: "*", remote_addresses: "127.0.0.0/8,::/127", local_ports: "*", remote_ports: "*", interfaces_empty: true, interface_types: "All", package: "", owner: "", remote_user: "", remote_machine: "", secure_flags: 0, edge_traversal: 1 }
+
+---- tests::rejects_unexpected_enabled stdout ----
+
+thread 'tests::rejects_unexpected_enabled' (41) panicked at <workspace>/review-fix-evidence/firewall/firewall_scope.red.rs:169:9:
+accepted unexpected enabled: RuleScope { name: "pi_sandbox_offline_block_loopback_tcp", description: "Pi Sandbox Offline - Block Loopback TCP", direction: 2, protocol: 6, action: 0, enabled: false, profiles: 2147483647, user: "O:LSD:(A;;CC;;;S-1-5-21-1001)", application: "", service: "", local_addresses: "*", remote_addresses: "127.0.0.0/8,::/127", local_ports: "*", remote_ports: "*", interfaces_empty: true, interface_types: "All", package: "", owner: "", remote_user: "", remote_machine: "", secure_flags: 0, edge_traversal: 0 }
+
+---- tests::rejects_unexpected_interface_types stdout ----
+
+thread 'tests::rejects_unexpected_interface_types' (42) panicked at <workspace>/review-fix-evidence/firewall/firewall_scope.red.rs:113:9:
+accepted unexpected interface_types: RuleScope { name: "pi_sandbox_offline_block_loopback_tcp", description: "Pi Sandbox Offline - Block Loopback TCP", direction: 2, protocol: 6, action: 0, enabled: true, profiles: 2147483647, user: "O:LSD:(A;;CC;;;S-1-5-21-1001)", application: "", service: "", local_addresses: "*", remote_addresses: "127.0.0.0/8,::/127", local_ports: "*", remote_ports: "*", interfaces_empty: true, interface_types: "Wireless", package: "", owner: "", remote_user: "", remote_machine: "", secure_flags: 0, edge_traversal: 0 }
+
+---- tests::rejects_unexpected_interfaces_empty stdout ----
+
+thread 'tests::rejects_unexpected_interfaces_empty' (43) panicked at <workspace>/review-fix-evidence/firewall/firewall_scope.red.rs:105:9:
+accepted unexpected interfaces_empty: RuleScope { name: "pi_sandbox_offline_block_loopback_tcp", description: "Pi Sandbox Offline - Block Loopback TCP", direction: 2, protocol: 6, action: 0, enabled: true, profiles: 2147483647, user: "O:LSD:(A;;CC;;;S-1-5-21-1001)", application: "", service: "", local_addresses: "*", remote_addresses: "127.0.0.0/8,::/127", local_ports: "*", remote_ports: "*", interfaces_empty: false, interface_types: "All", package: "", owner: "", remote_user: "", remote_machine: "", secure_flags: 0, edge_traversal: 0 }
+
+---- tests::rejects_unexpected_local_addresses stdout ----
+
+thread 'tests::rejects_unexpected_local_addresses' (44) panicked at <workspace>/review-fix-evidence/firewall/firewall_scope.red.rs:81:9:
+accepted unexpected local_addresses: RuleScope { name: "pi_sandbox_offline_block_loopback_tcp", description: "Pi Sandbox Offline - Block Loopback TCP", direction: 2, protocol: 6, action: 0, enabled: true, profiles: 2147483647, user: "O:LSD:(A;;CC;;;S-1-5-21-1001)", application: "", service: "", local_addresses: "192.0.2.1", remote_addresses: "127.0.0.0/8,::/127", local_ports: "*", remote_ports: "*", interfaces_empty: true, interface_types: "All", package: "", owner: "", remote_user: "", remote_machine: "", secure_flags: 0, edge_traversal: 0 }
+
+---- tests::rejects_unexpected_name stdout ----
+
+thread 'tests::rejects_unexpected_name' (46) panicked at <workspace>/review-fix-evidence/firewall/firewall_scope.red.rs:225:9:
+accepted unexpected name: RuleScope { name: "another-rule", description: "Pi Sandbox Offline - Block Loopback TCP", direction: 2, protocol: 6, action: 0, enabled: true, profiles: 2147483647, user: "O:LSD:(A;;CC;;;S-1-5-21-1001)", application: "", service: "", local_addresses: "*", remote_addresses: "127.0.0.0/8,::/127", local_ports: "*", remote_ports: "*", interfaces_empty: true, interface_types: "All", package: "", owner: "", remote_user: "", remote_machine: "", secure_flags: 0, edge_traversal: 0 }
+
+---- tests::rejects_unexpected_local_ports stdout ----
+
+thread 'tests::rejects_unexpected_local_ports' (45) panicked at <workspace>/review-fix-evidence/firewall/firewall_scope.red.rs:89:9:
+accepted unexpected local_ports: RuleScope { name: "pi_sandbox_offline_block_loopback_tcp", description: "Pi Sandbox Offline - Block Loopback TCP", direction: 2, protocol: 6, action: 0, enabled: true, profiles: 2147483647, user: "O:LSD:(A;;CC;;;S-1-5-21-1001)", application: "", service: "", local_addresses: "*", remote_addresses: "127.0.0.0/8,::/127", local_ports: "443", remote_ports: "*", interfaces_empty: true, interface_types: "All", package: "", owner: "", remote_user: "", remote_machine: "", secure_flags: 0, edge_traversal: 0 }
+
+---- tests::rejects_unexpected_owner stdout ----
+
+thread 'tests::rejects_unexpected_owner' (47) panicked at <workspace>/review-fix-evidence/firewall/firewall_scope.red.rs:129:9:
+accepted unexpected owner: RuleScope { name: "pi_sandbox_offline_block_loopback_tcp", description: "Pi Sandbox Offline - Block Loopback TCP", direction: 2, protocol: 6, action: 0, enabled: true, profiles: 2147483647, user: "O:LSD:(A;;CC;;;S-1-5-21-1001)", application: "", service: "", local_addresses: "*", remote_addresses: "127.0.0.0/8,::/127", local_ports: "*", remote_ports: "*", interfaces_empty: true, interface_types: "All", package: "", owner: "S-1-5-21-99", remote_user: "", remote_machine: "", secure_flags: 0, edge_traversal: 0 }
+
+---- tests::rejects_unexpected_profiles stdout ----
+
+thread 'tests::rejects_unexpected_profiles' (49) panicked at <workspace>/review-fix-evidence/firewall/firewall_scope.red.rs:201:9:
+accepted unexpected profiles: RuleScope { name: "pi_sandbox_offline_block_loopback_tcp", description: "Pi Sandbox Offline - Block Loopback TCP", direction: 2, protocol: 6, action: 0, enabled: true, profiles: 1, user: "O:LSD:(A;;CC;;;S-1-5-21-1001)", application: "", service: "", local_addresses: "*", remote_addresses: "127.0.0.0/8,::/127", local_ports: "*", remote_ports: "*", interfaces_empty: true, interface_types: "All", package: "", owner: "", remote_user: "", remote_machine: "", secure_flags: 0, edge_traversal: 0 }
+
+---- tests::rejects_unexpected_protocol stdout ----
+
+thread 'tests::rejects_unexpected_protocol' (50) panicked at <workspace>/review-fix-evidence/firewall/firewall_scope.red.rs:185:9:
+accepted unexpected protocol: RuleScope { name: "pi_sandbox_offline_block_loopback_tcp", description: "Pi Sandbox Offline - Block Loopback TCP", direction: 2, protocol: 17, action: 0, enabled: true, profiles: 2147483647, user: "O:LSD:(A;;CC;;;S-1-5-21-1001)", application: "", service: "", local_addresses: "*", remote_addresses: "127.0.0.0/8,::/127", local_ports: "*", remote_ports: "*", interfaces_empty: true, interface_types: "All", package: "", owner: "", remote_user: "", remote_machine: "", secure_flags: 0, edge_traversal: 0 }
+
+---- tests::rejects_unexpected_remote_ports stdout ----
+
+thread 'tests::rejects_unexpected_remote_ports' (53) panicked at <workspace>/review-fix-evidence/firewall/firewall_scope.red.rs:97:9:
+accepted unexpected remote_ports: RuleScope { name: "pi_sandbox_offline_block_loopback_tcp", description: "Pi Sandbox Offline - Block Loopback TCP", direction: 2, protocol: 6, action: 0, enabled: true, profiles: 2147483647, user: "O:LSD:(A;;CC;;;S-1-5-21-1001)", application: "", service: "", local_addresses: "*", remote_addresses: "127.0.0.0/8,::/127", local_ports: "*", remote_ports: "443", interfaces_empty: true, interface_types: "All", package: "", owner: "", remote_user: "", remote_machine: "", secure_flags: 0, edge_traversal: 0 }
+
+---- tests::rejects_unexpected_remote_addresses stdout ----
+
+thread 'tests::rejects_unexpected_remote_addresses' (51) panicked at <workspace>/review-fix-evidence/firewall/firewall_scope.red.rs:209:9:
+accepted unexpected remote_addresses: RuleScope { name: "pi_sandbox_offline_block_loopback_tcp", description: "Pi Sandbox Offline - Block Loopback TCP", direction: 2, protocol: 6, action: 0, enabled: true, profiles: 2147483647, user: "O:LSD:(A;;CC;;;S-1-5-21-1001)", application: "", service: "", local_addresses: "*", remote_addresses: "127.0.0.1", local_ports: "*", remote_ports: "*", interfaces_empty: true, interface_types: "All", package: "", owner: "", remote_user: "", remote_machine: "", secure_flags: 0, edge_traversal: 0 }
+
+---- tests::rejects_unexpected_service stdout ----
+
+thread 'tests::rejects_unexpected_service' (56) panicked at <workspace>/review-fix-evidence/firewall/firewall_scope.red.rs:73:9:
+accepted unexpected service: RuleScope { name: "pi_sandbox_offline_block_loopback_tcp", description: "Pi Sandbox Offline - Block Loopback TCP", direction: 2, protocol: 6, action: 0, enabled: true, profiles: 2147483647, user: "O:LSD:(A;;CC;;;S-1-5-21-1001)", application: "", service: "OnlyOneService", local_addresses: "*", remote_addresses: "127.0.0.0/8,::/127", local_ports: "*", remote_ports: "*", interfaces_empty: true, interface_types: "All", package: "", owner: "", remote_user: "", remote_machine: "", secure_flags: 0, edge_traversal: 0 }
+
+---- tests::rejects_unexpected_secure_flags stdout ----
+
+thread 'tests::rejects_unexpected_secure_flags' (55) panicked at <workspace>/review-fix-evidence/firewall/firewall_scope.red.rs:153:9:
+accepted unexpected secure_flags: RuleScope { name: "pi_sandbox_offline_block_loopback_tcp", description: "Pi Sandbox Offline - Block Loopback TCP", direction: 2, protocol: 6, action: 0, enabled: true, profiles: 2147483647, user: "O:LSD:(A;;CC;;;S-1-5-21-1001)", application: "", service: "", local_addresses: "*", remote_addresses: "127.0.0.0/8,::/127", local_ports: "*", remote_ports: "*", interfaces_empty: true, interface_types: "All", package: "", owner: "", remote_user: "", remote_machine: "", secure_flags: 1, edge_traversal: 0 }
+
+---- tests::rejects_unexpected_user stdout ----
+
+thread 'tests::rejects_unexpected_user' (57) panicked at <workspace>/review-fix-evidence/firewall/firewall_scope.red.rs:233:9:
+accepted unexpected user: RuleScope { name: "pi_sandbox_offline_block_loopback_tcp", description: "Pi Sandbox Offline - Block Loopback TCP", direction: 2, protocol: 6, action: 0, enabled: true, profiles: 2147483647, user: "O:LSD:(A;;CC;;;S-1-5-21-10010)", application: "", service: "", local_addresses: "*", remote_addresses: "127.0.0.0/8,::/127", local_ports: "*", remote_ports: "*", interfaces_empty: true, interface_types: "All", package: "", owner: "", remote_user: "", remote_machine: "", secure_flags: 0, edge_traversal: 0 }
+
+---- tests::rejects_unexpected_package stdout ----
+
+thread 'tests::rejects_unexpected_package' (48) panicked at <workspace>/review-fix-evidence/firewall/firewall_scope.red.rs:121:9:
+accepted unexpected package: RuleScope { name: "pi_sandbox_offline_block_loopback_tcp", description: "Pi Sandbox Offline - Block Loopback TCP", direction: 2, protocol: 6, action: 0, enabled: true, profiles: 2147483647, user: "O:LSD:(A;;CC;;;S-1-5-21-1001)", application: "", service: "", local_addresses: "*", remote_addresses: "127.0.0.0/8,::/127", local_ports: "*", remote_ports: "*", interfaces_empty: true, interface_types: "All", package: "S-1-15-2-1", owner: "", remote_user: "", remote_machine: "", secure_flags: 0, edge_traversal: 0 }
+
+---- tests::rejects_unexpected_remote_user stdout ----
+
+thread 'tests::rejects_unexpected_remote_user' (54) panicked at <workspace>/review-fix-evidence/firewall/firewall_scope.red.rs:137:9:
+accepted unexpected remote_user: RuleScope { name: "pi_sandbox_offline_block_loopback_tcp", description: "Pi Sandbox Offline - Block Loopback TCP", direction: 2, protocol: 6, action: 0, enabled: true, profiles: 2147483647, user: "O:LSD:(A;;CC;;;S-1-5-21-1001)", application: "", service: "", local_addresses: "*", remote_addresses: "127.0.0.0/8,::/127", local_ports: "*", remote_ports: "*", interfaces_empty: true, interface_types: "All", package: "", owner: "", remote_user: "O:LSD:(A;;CC;;;S-1-5-21-99)", remote_machine: "", secure_flags: 0, edge_traversal: 0 }
+
+---- tests::rejects_unexpected_remote_machine stdout ----
+
+thread 'tests::rejects_unexpected_remote_machine' (52) panicked at <workspace>/review-fix-evidence/firewall/firewall_scope.red.rs:145:9:
+accepted unexpected remote_machine: RuleScope { name: "pi_sandbox_offline_block_loopback_tcp", description: "Pi Sandbox Offline - Block Loopback TCP", direction: 2, protocol: 6, action: 0, enabled: true, profiles: 2147483647, user: "O:LSD:(A;;CC;;;S-1-5-21-1001)", application: "", service: "", local_addresses: "*", remote_addresses: "127.0.0.0/8,::/127", local_ports: "*", remote_ports: "*", interfaces_empty: true, interface_types: "All", package: "", owner: "", remote_user: "", remote_machine: "O:LSD:(A;;CC;;;S-1-5-21-99)", secure_flags: 0, edge_traversal: 0 }
+
+
+failures:
+    tests::rejects_unexpected_action
+    tests::rejects_unexpected_application
+    tests::rejects_unexpected_description
+    tests::rejects_unexpected_direction
+    tests::rejects_unexpected_edge_traversal
+    tests::rejects_unexpected_enabled
+    tests::rejects_unexpected_interface_types
+    tests::rejects_unexpected_interfaces_empty
+    tests::rejects_unexpected_local_addresses
+    tests::rejects_unexpected_local_ports
+    tests::rejects_unexpected_name
+    tests::rejects_unexpected_owner
+    tests::rejects_unexpected_package
+    tests::rejects_unexpected_profiles
+    tests::rejects_unexpected_protocol
+    tests::rejects_unexpected_remote_addresses
+    tests::rejects_unexpected_remote_machine
+    tests::rejects_unexpected_remote_ports
+    tests::rejects_unexpected_remote_user
+    tests::rejects_unexpected_secure_flags
+    tests::rejects_unexpected_service
+    tests::rejects_unexpected_user
+
+test result: FAILED. 1 passed; 22 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
