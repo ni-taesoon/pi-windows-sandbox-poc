@@ -66,3 +66,19 @@ fn errors_kill_and_continue_and_outputs_do_not_expose_context() {
     assert!(HW.contains("process_exited_without_verified_attach_return"));
     assert!(HW.contains("unowned single-step diagnostic event"));
 }
+
+#[test]
+fn both_context_api_buffers_have_explicit_x64_alignment() {
+    assert!(HW.contains("#[repr(C, align(16))]"));
+    assert!(HW.contains("std::mem::align_of::<AlignedContext>() >= 16"));
+    assert!(HW.contains("std::mem::offset_of!(AlignedContext, context) == 0"));
+    assert_eq!(
+        HW.matches("let mut aligned: AlignedContext = std::mem::zeroed()")
+            .count(),
+        2
+    );
+    assert_eq!(HW.matches("let context = &mut aligned.context").count(), 2);
+    assert!(HW.contains("GetThreadContext(self.thread, context)"));
+    assert!(HW.contains("SetThreadContext(self.thread, context)"));
+    assert!(!HW.contains("let mut context: CONTEXT"));
+}

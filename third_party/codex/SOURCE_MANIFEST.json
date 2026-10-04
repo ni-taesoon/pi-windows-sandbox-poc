@@ -283,7 +283,7 @@
       "destination": "native/windows-sandbox/src/sechost_breakpoints.rs",
       "upstream": [],
       "origin": "new product integration source",
-      "adapted_sha256": "245e2e6483c7a66d2db87efac0e57243feeb3044d9156dc25ba2b609c6cda49f"
+      "adapted_sha256": "fb198b4b172a6f96b177e8556fc9fa613fe72b83ec72a68227f9817e72b605bf"
     }
   ]
 }

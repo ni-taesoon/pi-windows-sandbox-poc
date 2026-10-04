@@ -4,6 +4,15 @@ use serde::{Deserialize, Serialize};
 use windows_sys::Win32::{
     Foundation::*, Security::Cryptography::CryptHashCertificate2, System::Diagnostics::Debug::*,
 };
+// windows-sys 0.52 models x64 CONTEXT with natural alignment only. Windows
+// context APIs require a 16-byte-aligned buffer, including debug-only writes.
+#[repr(C, align(16))]
+struct AlignedContext {
+    context: CONTEXT,
+}
+const _: () = assert!(std::mem::align_of::<AlignedContext>() >= 16);
+const _: () = assert!(std::mem::offset_of!(AlignedContext, context) == 0);
+
 const ENTRY: u64 = 0x1de80;
 const SITES: [u64; 4] = [0x1df09, 0x1df3a, 0x1ec25, 0x1dfc4];
 const HASH: &str = "9e91b726a67d75fbe3cc9e74fbe70332c8d9f8726cffba49370a5e6bc73e4635";
@@ -136,19 +145,29 @@ impl State {
     }
     unsafe fn context(&self, evidence: &mut Evidence) -> Result<CONTEXT> {
         ensure!(self.thread != 0, "primary thread unavailable");
-        let mut context: CONTEXT = std::mem::zeroed();
+        let mut aligned: AlignedContext = std::mem::zeroed();
+        let context = &mut aligned.context;
+        ensure!(
+            (context as *mut CONTEXT as usize) % 16 == 0,
+            "context buffer alignment"
+        );
         context.ContextFlags =
             CONTEXT_CONTROL_AMD64 | CONTEXT_INTEGER_AMD64 | CONTEXT_DEBUG_REGISTERS_AMD64;
-        if GetThreadContext(self.thread, &mut context) == 0 {
+        if GetThreadContext(self.thread, context) == 0 {
             let code = GetLastError();
             evidence.failure_stage = Some("get_thread_context".into());
             evidence.win32 = Some(code);
             anyhow::bail!("diagnostic GetThreadContext failed win32={code}");
         }
-        Ok(context)
+        Ok(*context)
     }
     unsafe fn set_debug(&self, values: [u64; 6], evidence: &mut Evidence) -> Result<()> {
-        let mut context: CONTEXT = std::mem::zeroed();
+        let mut aligned: AlignedContext = std::mem::zeroed();
+        let context = &mut aligned.context;
+        ensure!(
+            (context as *mut CONTEXT as usize) % 16 == 0,
+            "context buffer alignment"
+        );
         context.ContextFlags = CONTEXT_DEBUG_REGISTERS_AMD64;
         [
             context.Dr0,
@@ -158,7 +177,7 @@ impl State {
             context.Dr6,
             context.Dr7,
         ] = values;
-        if SetThreadContext(self.thread, &context) == 0 {
+        if SetThreadContext(self.thread, context) == 0 {
             let code = GetLastError();
             evidence.failure_stage = Some("set_thread_debug_context".into());
             evidence.win32 = Some(code);
