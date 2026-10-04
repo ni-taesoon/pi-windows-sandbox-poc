@@ -1,0 +1,59 @@
+{
+  "repository": "ni-taesoon/pi-windows-sandbox-poc",
+  "runId": 37189834072,
+  "jobId": 111399536076,
+  "runUrl": "https://github.com/ni-taesoon/pi-windows-sandbox-poc/actions/runs/37189834072",
+  "jobUrl": "https://github.com/ni-taesoon/pi-windows-sandbox-poc/actions/runs/37189834072/job/111399536076",
+  "sourceCommit": "07664a27f9b6d5fe9a54dd4c75ea098ececef39d",
+  "actor": "ni-taesoon",
+  "event": "workflow_dispatch",
+  "branch": "main",
+  "workflow": ".github/workflows/windows-python-lab.yml",
+  "status": "completed",
+  "conclusion": "failure",
+  "startedAt": "2026-10-04T08:43:18Z",
+  "completedAt": "2026-10-04T08:44:30Z",
+  "runner": "windows-2022",
+  "build": {
+    "conclusion": "success",
+    "target": "x86_64-pc-windows-msvc",
+    "rustc": "1.99.0 (b940084d7 2026-09-28)",
+    "pythonVersion": "3.12.10"
+  },
+  "failure": {
+    "stepNumber": 8,
+    "step": "Stage fixed protected synthetic lab",
+    "script": "scripts/stage_windows_python_lab.ps1",
+    "line": 39,
+    "message": "Reparse-containing stage source refused.",
+    "exitCode": 1,
+    "phase": "Stage",
+    "pythonHome": "C:\\hostedtoolcache\\windows\\Python\\3.12.10\\x64",
+    "buildDirectory": "D:\\a\\pi-windows-sandbox-poc\\pi-windows-sandbox-poc\\native\\windows-sandbox\\target\\x86_64-pc-windows-msvc\\debug",
+    "offendingPath": "Not recorded; guard scanned both PythonHome and BuildDirectory recursively.",
+    "beforeLabRootCreation": true,
+    "beforeLabAclChanges": true,
+    "accountSetupSkipped": true,
+    "restrictedPythonExecutionSkipped": true,
+    "recoverySkipped": true
+  },
+  "artifact": {
+    "id": 11298790605,
+    "name": "windows-fixed-python-lab-evidence-37189834072-1",
+    "url": "https://github.com/ni-taesoon/pi-windows-sandbox-poc/actions/runs/37189834072/artifacts/11298790605",
+    "zipSha256": "a03c6dbf395bc55b05fb3d41a8b0103676e249f3222a6e2c507a7441f376aa7e",
+    "verifiedZipDigest": true,
+    "files": [
+      "source-commit.txt",
+      "SOURCE_SHA256SUMS.txt",
+      "toolchain.txt",
+      "build.log",
+      "build-identity.json"
+    ]
+  },
+  "limits": [
+    "No runtime SID/token/image/anyJob/exits/recovery evidence was produced.",
+    "Failing stage log file was not included in artifact; exact exception is in decoded job.log.",
+    "job.log preserves GitHub-redacted credential placeholders; no credential store was retrieved."
+  ]
+}

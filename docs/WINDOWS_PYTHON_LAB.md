@@ -32,7 +32,8 @@ and built helper/driver hashes, and these changes:
   Retain only enumerated non-secret evidence. No WFP removal, account deletion,
   UAC, antivirus, GPO, system-directory ACL, or network-setting weakening.
 
-An approval switch or GitHub dispatch is an operator guard, **not** a substitute
+An approval switch, dedicated-branch push or GitHub dispatch is an operator guard,
+**not** a substitute
 for explicit action-time user approval. No networking probes, denied-read canary,
 public-site traffic, package installs, application documents, or production use
 are included. Obtain additional approval for any materially different target.
@@ -106,16 +107,75 @@ binding, native server session/desktop behavior, and adversarial tests remain
 production blockers. Real Windows failures must be diagnosed from retained
 errors; never infer success from cross-compilation or source review.
 
-## Manual lab workflow
+## Approved automatic branch and manual lab workflow
 
-`.github/workflows/windows-python-lab.yml` is manual `workflow_dispatch` only.
-It requires the exact reviewed source commit and an approval checkbox defaulting
-to false. The checkbox attests approval already obtained; never dispatch on
-behalf of the user before that specific action-time approval. Official pinned
-checkout/setup-python actions and official rustup build the checked source. The
+`.github/workflows/windows-python-lab.yml` supports automatic `push` runs only on
+`lab/approved-windows-python` in `ni-taesoon/pi-windows-sandbox-poc`, plus manual
+`workflow_dispatch`. Main, other branches, pull requests, schedules and
+workflow-run events do not trigger this lab. The basic CI workflow stays manual.
+
+The operator may push/update the dedicated branch only to a reviewed commit after
+obtaining explicit action-time approval for this exact security-changing lab.
+For the currently approved bounded test, reviewed same-scope recoverable fixes
+may be pushed there to validate them on fresh hosted VMs. The branch name is an
+operator attestation, not authorization by itself. This is not standing permission
+for unrelated future runs or broader security changes. No new token, secret,
+GitHub App installation or permission grant is introduced.
+
+For a push, the first step rejects branch deletion/unknown deletion state,
+requires the exact repository and dedicated branch ref, validates `github.sha` as a full lowercase SHA, and captures it once. The
+checkout, HEAD check and build evidence use that immutable event SHA; a push
+never resolves moving main. Later branch movement cannot change that attempt's
+source. An existing push run's rerun uses its original event SHA, so a newly
+reviewed fix needs a new branch update/push. Operators must check the actual
+Actions run and recorded SHA before claiming a push triggered validation.
+
+GitHub documents that ordinary GitHub App installation tokens can trigger events
+that workflow `GITHUB_TOKEN` pushes intentionally suppress; the existing
+connector's actual ref-update-to-push behavior must still be confirmed by
+observing a run. No additional credential is created for this purpose. See
+[GitHub triggering guidance](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
+
+### Manual alternative
+The manual `source_sha` input defaults to literal `main`, meaning the current reviewed
+main for this bounded ongoing lab test. Alternatively, supply a reviewed full
+lowercase 40-character commit SHA. The approval checkbox still defaults to false;
+it attests approval already obtained, so never dispatch before the specific
+action-time approval. Selecting `main` does not authorize unreviewed source or
+expand the approved security changes.
+
+At the start of each job attempt, `main` is resolved exactly once using a fixed
+public `git ls-remote` URL and `refs/heads/main`. Nonzero exit status, more than
+one result, or anything other than one full lowercase SHA plus the exact ref
+fails closed. No credential/token or interpolated user input is passed to that
+command. The resolved SHA is saved as a step output; checkout, HEAD verification,
+and build identity all use that SHA. Later changes to main cannot change the
+source already selected for that attempt. Fixed-SHA input never resolves main.
+
+To use the manual alternative after this workflow version is merged, start one
+**new manual run** with
+`source_sha=main` and the separately approved checkbox. For authorized,
+same-scope recoverable fixes subsequently reviewed and merged to main, rerunning
+that run starts a fresh VM and resolves main again at the beginning of the new
+attempt. It does not reuse the prior VM or retry setup inside it. Re-running an
+older fixed-SHA run continues using that old SHA; it cannot acquire this new
+workflow definition. GitHub reruns retain the original event/workflow context,
+so future workflow-definition fixes also require a new manual dispatch. The
+resolved `lab-evidence/source-commit.txt` and `build-identity.json` identify the
+actual tested source, which can differ from the original event's `GITHUB_SHA`.
+See [GitHub rerun semantics](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs).
+
+Official pinned checkout/setup-python actions and official rustup build the
+checked source. The
 trusted pipeline records compiler, lockfile, source, executable and runtime hashes
 and passes those same-build pins into staging. This establishes traceability under
 the trusted build assumption, not independently reproducible-build proof.
+
+Before staging or security changes, a separate PowerShell process runs
+`tests/windows-lab/test_stage_sources.ps1`, using mocked item/enumeration results
+without creating links or changing OS security. Failure blocks staging; its
+`stage-selector-test.log` is retained as named non-secret evidence. This is
+selector regression coverage, not native sandbox enforcement evidence.
 
 The workflow always attempts authenticated owned-account disable after a setup
 attempt. Only named non-secret evidence files are retained for seven days; neither

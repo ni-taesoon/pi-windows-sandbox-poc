@@ -1,0 +1,10 @@
+STATIC SOURCE-CONTRACT RED/GREEN ONLY. No PowerShell or Windows execution.
+Historical source reconstructed from exact pre-edit capture and verified against frozen SOURCE_SHA256SUMS entry.
+Historical stager SHA256: 2fdf890512c67f81bb4d443a4e3be49989e6f6328519f881c41b5c17547e4162
+RED historical source exit=1
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+AssertionError: stage must not recursively scan unselected build entries or wildcard-copy runtime
+
+GREEN current source same assertion exit=0
+Separate cargo test --test python_lab_contract: 4 passed (see python-lab-stage-selection-tests.log).

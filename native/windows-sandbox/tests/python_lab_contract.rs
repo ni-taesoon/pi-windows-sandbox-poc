@@ -1,5 +1,6 @@
 //! Portable source-contract regressions only, not Windows execution evidence.
 const DRIVER: &str = include_str!("../examples/python_lab/windows.rs");
+const SOURCES: &str = include_str!("../../../scripts/windows_lab_stage_sources.ps1");
 const STAGER: &str = include_str!("../../../scripts/stage_windows_python_lab.ps1");
 #[test]
 fn production_gate_and_fixed_lab_surface_remain_separate() {
@@ -49,11 +50,36 @@ fn staging_requires_explicit_scope_and_hashes() {
         "ExpectedPythonSha256",
         "ApprovedSourceSha256",
         "Existing lab root refused",
-        "Reparse-containing stage source refused",
     ] {
         assert!(STAGER.contains(requirement), "missing {requirement}");
     }
     assert!(!STAGER.contains("Invoke-WebRequest"));
     assert!(!STAGER.contains("Set-NetFirewallProfile"));
     assert!(!STAGER.contains("EnableLUA"));
+}
+
+#[test]
+fn staging_selects_only_copied_inputs_and_diagnoses_links() {
+    assert!(SOURCES.contains("Reparse-containing stage source refused:"));
+    for field in [
+        "sourceRole =",
+        "path = $Item.FullName",
+        "linkType =",
+        "attributes =",
+    ] {
+        assert!(SOURCES.contains(field));
+    }
+    assert!(SOURCES.contains("'helper-executable'"));
+    assert!(SOURCES.contains("'driver-executable'"));
+    assert!(!SOURCES.contains("Get-ChildItem -LiteralPath $build"));
+    assert!(!SOURCES.contains("Get-ChildItem -LiteralPath $BuildDirectory"));
+    assert!(!STAGER.contains("Copy-Item -Path"));
+    assert!(!STAGER.contains("-Recurse"));
+    assert!(STAGER.contains("foreach ($entry in $selection.runtimeEntries)"));
+    assert!(
+        SOURCES
+            .find("Assert-LabSourceItem -Item $item -Role 'python-runtime'")
+            .unwrap()
+            < SOURCES.find("foreach ($child in Get-ChildItem").unwrap()
+    );
 }

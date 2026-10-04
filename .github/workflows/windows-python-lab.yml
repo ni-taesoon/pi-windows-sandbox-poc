@@ -1,13 +1,16 @@
 name: Windows fixed Python lab (security changes)
 
-# Manual ONLY. Never add push/pull_request/workflow_run triggers to this workflow.
-# The checkbox is an operator attestation, not a substitute for action-time approval.
+# Automatic only on the dedicated approved-lab branch; never main or pull_request.
+# Branch pushes/checkboxes attest prior approval; neither grants security authorization.
 on:
+  push:
+    branches: [lab/approved-windows-python]
   workflow_dispatch:
     inputs:
       source_sha:
-        description: 'Reviewed full lowercase 40-character source commit SHA'
+        description: 'main (resolve current reviewed main once per attempt), or reviewed full lowercase 40-character SHA'
         required: true
+        default: main
         type: string
       approved_security_changes:
         description: 'Explicitly approved fresh win22 VM: PiSandboxOffline, C:\PiSandboxLab ACL/store, product firewall/WFP, fixed Python, disable/dispose'
@@ -30,14 +33,42 @@ jobs:
       RUST_BACKTRACE: '1'
       PYTHONUTF8: '1'
     steps:
-      - name: Require exact source and action-time security approval
+      - name: Guard approved event and capture immutable source
+        id: source
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REPOSITORY: ${{ github.repository }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_SHA: ${{ github.sha }}
+          PUSH_DELETED: ${{ github.event.deleted }}
           APPROVED_SECURITY_CHANGES: ${{ inputs.approved_security_changes }}
         run: |
-          if ($env:SOURCE_SHA -cnotmatch '^[0-9a-f]{40}$') { throw 'A full immutable reviewed source SHA is required.' }
-          if ($env:APPROVED_SECURITY_CHANGES -cne 'true') { throw 'Security-change approval absent; no lab work permitted.' }
+          if ($env:EVENT_REPOSITORY -cne 'ni-taesoon/pi-windows-sandbox-poc') { throw 'Unexpected repository.' }
           if ($env:ImageOS -ne 'win22') { throw 'Only fresh Windows Server 2022 hosted runners are in scope.' }
+          if ($env:EVENT_NAME -ceq 'push') {
+            if ($env:PUSH_DELETED -cne 'false') { throw 'Branch deletion or unknown push state is not an approved lab trigger.' }
+            if ($env:EVENT_REF -cne 'refs/heads/lab/approved-windows-python') { throw 'Push is outside the dedicated approved lab branch.' }
+            if ($env:EVENT_SHA -cnotmatch '\A[0-9a-f]{40}\z') { throw 'Push commit is not an immutable SHA.' }
+            # Operator must obtain action-time approval before pushing a reviewed
+            # commit here. Branch naming alone never grants that authorization.
+            $resolved = $env:EVENT_SHA
+          } elseif ($env:EVENT_NAME -ceq 'workflow_dispatch') {
+            if ($env:APPROVED_SECURITY_CHANGES -cne 'true') { throw 'Security-change approval absent; no lab work permitted.' }
+            if ($env:SOURCE_SHA -cne 'main' -and $env:SOURCE_SHA -cnotmatch '\A[0-9a-f]{40}\z') { throw 'source_sha must be main or a full lowercase reviewed SHA.' }
+            $resolved = $env:SOURCE_SHA
+            if ($resolved -ceq 'main') {
+              # Resolve once, before checkout. Never place input in a shell command.
+              # Fixed public remote/ref; no API token, credential persistence or dynamic URL.
+              $remote = @(git ls-remote --exit-code --refs https://github.com/ni-taesoon/pi-windows-sandbox-poc.git refs/heads/main)
+              if ($LASTEXITCODE -ne 0 -or $remote.Count -ne 1) { throw 'Cannot resolve exactly one main commit.' }
+              if ($remote[0] -cmatch '\A([0-9a-f]{40})\trefs/heads/main\z') {
+                $resolved = $Matches[1]
+              } else { throw 'Malformed main resolution.' }
+            }
+          } else { throw 'Unsupported workflow event.' }
+          "sha=$resolved" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "Resolved source commit for this attempt: $resolved"
           # Preserve frozen manifest bytes during the first checkout on Windows.
           git config --global core.autocrlf false
           if ($LASTEXITCODE -ne 0) { throw 'Cannot disable checkout newline conversion.' }
@@ -46,12 +77,12 @@ jobs:
       - name: Check out reviewed source without persisted credentials
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ steps.source.outputs.sha }}
           persist-credentials: false
           fetch-depth: 1
       - name: Verify immutable checkout
         env:
-          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
         run: |
           $actual = git rev-parse HEAD
           if ($LASTEXITCODE -ne 0 -or $actual -cne $env:SOURCE_SHA) { throw 'Source identity mismatch.' }
@@ -69,7 +100,7 @@ jobs:
           Copy-Item -LiteralPath SOURCE_SHA256SUMS.txt -Destination lab-evidence/SOURCE_SHA256SUMS.txt
       - name: Build reviewed helper and fixed lab driver with official MSVC toolchain
         env:
-          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
         run: |
           rustup toolchain install stable --profile minimal --target x86_64-pc-windows-msvc
           if ($LASTEXITCODE -ne 0) { throw 'Official Rust toolchain setup failed.' }
@@ -87,6 +118,10 @@ jobs:
             pythonSha256 = (Get-FileHash "$env:pythonLocation/python.exe" -Algorithm SHA256).Hash
             provenance = 'Trusted pinned-source build and official setup-python runtime; hashes do not independently prove compiler or package provenance.'
           } | ConvertTo-Json | Set-Content lab-evidence/build-identity.json
+      - name: Mocked selector regression (no filesystem or security mutation)
+        run: |
+          pwsh -NoProfile -File tests/windows-lab/test_stage_sources.ps1 2>&1 | Tee-Object -FilePath lab-evidence/stage-selector-test.log
+          if ($LASTEXITCODE -ne 0) { throw 'Mocked stage selector regression failed; no staging permitted.' }
       - name: Stage fixed protected synthetic lab
         id: stage
         run: |
@@ -129,7 +164,7 @@ jobs:
           } else {
             'No LAB_SMOKE_PASS evidence was produced. Inspect the failing step and named logs.' | Add-Content $env:GITHUB_STEP_SUMMARY
           }
-          'LAB ONLY. Production activation stays false. No adversarial deny/escape/network validation. Fresh hosted VM must be disposed by job teardown; no reuse or automatic retry.' | Add-Content $env:GITHUB_STEP_SUMMARY
+          'LAB ONLY. Production activation stays false. No adversarial deny/escape/network validation. Fresh hosted VM must be disposed by job teardown; no VM reuse or in-job automatic retry.' | Add-Content $env:GITHUB_STEP_SUMMARY
       - name: Retain named safe evidence (never the credential store or root)
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2, verified official release
@@ -144,6 +179,7 @@ jobs:
             lab-evidence/toolchain.txt
             lab-evidence/build.log
             lab-evidence/build-identity.json
+            lab-evidence/stage-selector-test.log
             lab-evidence/stage.log
             lab-evidence/setup.log
             lab-evidence/run.log
