@@ -54,3 +54,17 @@ Local verification: 65 portable Rust tests, 10 Python tests and Windows-GNU
 probe-feature compilation passed. The native C build, import check on the actual
 produced PE and PowerShell mock additions await the approved Windows run; no local
 Windows probe was executed. No shared-station ACL or privilege grant is added.
+
+## Native build correction
+
+[Run 37203822828](https://github.com/ni-taesoon/pi-windows-sandbox-poc/actions/runs/37203822828)
+passed the Rust build but MSVC 19.44 could not link the probe: compiler-generated
+`__report_rangecheckfailure` was unresolved (LNK2019/LNK1120). The import verifier,
+staging and account setup were not reached. This run gives no probe runtime result.
+
+The standalone helper now terminates with the
+[Microsoft `__fastfail` intrinsic](https://learn.microsoft.com/en-us/cpp/intrinsics/fastfail?view=msvc-170)
+and `FAST_FAIL_RANGE_CHECK_FAILURE`. It has the C calling convention, no return
+path and no dependency on CRT. Range checks and /GS remain enabled; the existing
+Kernel32-only import verifier must still pass on the native output. A source
+regression checks the exact fatal helper body. Native relinking remains pending.

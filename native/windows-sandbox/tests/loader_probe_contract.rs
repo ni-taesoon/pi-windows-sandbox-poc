@@ -44,3 +44,20 @@ fn original_python_evidence_precedes_separate_nonpass_probe() {
     assert!(LAB.contains("&path(r\"trusted\\loader_probe.exe\"),"));
     assert!(LAB.contains("timeout_ms: 15000"));
 }
+
+#[test]
+fn compiler_range_check_failure_is_intrinsic_and_nonreturning() {
+    assert!(PROBE.contains("#include <intrin.h>"));
+    let body = PROBE
+        .split("__declspec(noreturn) void __cdecl __report_rangecheckfailure(void) {")
+        .nth(1)
+        .expect("compiler range-check helper is present")
+        .split('}')
+        .next()
+        .unwrap()
+        .trim();
+    assert_eq!(body, "__fastfail(FAST_FAIL_RANGE_CHECK_FAILURE);");
+    assert!(BUILD.contains("/GS "));
+    assert!(BUILD.contains("/NODEFAULTLIB"));
+    assert!(BUILD.contains("verify-probe"));
+}
