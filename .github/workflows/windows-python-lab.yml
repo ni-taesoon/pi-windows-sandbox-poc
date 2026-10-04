@@ -152,6 +152,9 @@ jobs:
           # No deletion, namespace replacement, system ACL changes or host fallback.
           # Authenticated store determines the owned SID. Failure remains a failure.
           ./scripts/stage_windows_python_lab.ps1 -Phase Disable -ApprovedDisposableVm 2>&1 | Tee-Object -FilePath lab-evidence/disable.log
+      - name: Read-only bounded system loader structural summary
+        if: ${{ always() && steps.stage.outcome == 'success' }}
+        run: python scripts/inspect_sechost_static.py
       - name: Inspect staged PE bytes and existing loader events (read-only)
         if: ${{ always() && steps.stage.outcome == 'success' && steps.run.outcome != 'skipped' }}
         run: |
@@ -209,3 +212,4 @@ jobs:
             lab-evidence/loader-events.json
             lab-evidence/loader-probe-build.log
             lab-evidence/loader-probe-evidence.json
+            lab-evidence/sechost-static-summary.json
