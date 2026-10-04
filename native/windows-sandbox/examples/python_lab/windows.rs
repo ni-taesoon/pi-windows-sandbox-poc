@@ -205,6 +205,13 @@ fn pin_inputs() -> Result<(Vec<File>, BTreeMap<String, String>)> {
     for name in ["python_lab.exe", "pi-windows-sandbox.exe", "fixture.py"] {
         pin_tree(&path("trusted").join(name), &mut handles, &mut digest)?;
     }
+    if cfg!(feature = "lab-loader-probe") {
+        pin_tree(
+            &path(r"trusted\loader_probe.exe"),
+            &mut handles,
+            &mut digest,
+        )?;
+    }
     Ok((handles, digest))
 }
 pub fn main() -> Result<()> {
@@ -265,6 +272,10 @@ fn dispatch() -> Result<()> {
     if args[0] == "disable" {
         return setup::disable_offline_account(&path("store"), &owner);
     }
+    ensure!(
+        !(cfg!(feature = "lab-loader-probe") && cfg!(feature = "lab-loader-trace")),
+        "diagnostic modes must not be combined"
+    );
     trusted_preflight()?;
     if args[0] == "setup" {
         ensure!(
@@ -337,24 +348,7 @@ fn dispatch() -> Result<()> {
         observe(&expected_sid)?.is_empty(),
         "preexisting dedicated-account process"
     );
-    let done = Arc::new(AtomicBool::new(false));
-    let finished = done.clone();
-    let observed_sid = expected_sid.clone();
-    let observer = std::thread::spawn(move || -> (Vec<Observed>, Option<String>) {
-        let mut found = BTreeMap::new();
-        while !finished.load(Ordering::SeqCst) {
-            match observe(&observed_sid) {
-                Ok(batch) => {
-                    for item in batch {
-                        found.entry(item.pid).or_insert(item);
-                    }
-                }
-                Err(error) => return (found.into_values().collect(), Some(format!("{error:#}"))),
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        (found.into_values().collect(), None)
-    });
+    let (done, observer) = start_observer(expected_sid.clone());
     // Read-only effective rule check immediately before the unsafe broker call.
     let launched = (|| -> Result<_> {
         network::verify_offline_protection(&expected_sid)?;
@@ -377,16 +371,21 @@ fn dispatch() -> Result<()> {
         ),
     };
     // Account recovery still encloses this entire dispatch in main().
-    let raw = serde_json::json!({"scope":"LAB_ONLY", "nativeValidated":false,"loaderTraceDiagnostic":cfg!(feature = "lab-loader-trace"),"accountSid":expected_sid,"run":launched.as_ref().ok(),"launchError":launched.as_ref().err().map(|e|format!("{e:#}")),"exitCodeHex":launched.as_ref().ok().map(|r|format!("0x{:08X}",r.exit_code)),"observerError":observer_error.as_deref(),"observed":observations.iter().map(|o| serde_json::json!({"pid":o.pid,"parentPid":o.parent_pid,"image":o.image,"sid":o.sid,"restricted":o.restricted,"inJob":o.in_job,"exited":o.exited()})).collect::<Vec<_>>()});
+    let raw = serde_json::json!({"scope":"LAB_ONLY", "nativeValidated":false,"loaderTraceDiagnostic":cfg!(feature = "lab-loader-trace"),"loaderProbeDiagnostic":cfg!(feature = "lab-loader-probe"),"accountSid":expected_sid,"run":launched.as_ref().ok(),"launchError":launched.as_ref().err().map(|e|format!("{e:#}")),"exitCodeHex":launched.as_ref().ok().map(|r|format!("0x{:08X}",r.exit_code)),"observerError":observer_error.as_deref(),"observed":observations.iter().map(|o| serde_json::json!({"pid":o.pid,"parentPid":o.parent_pid,"image":o.image,"sid":o.sid,"restricted":o.restricted,"inJob":o.in_job,"exited":o.exited()})).collect::<Vec<_>>()});
     fresh_write(
         &path(r"trusted\run-evidence.json"),
         &serde_json::to_vec_pretty(&raw)?,
     )?;
+    #[cfg(feature = "lab-loader-probe")]
+    loader_probe_differential(&expected_sid, &launched)?;
     if let Some(error) = observer_error {
         anyhow::bail!("independent observer failed: {error}");
     }
     if cfg!(feature = "lab-loader-trace") {
         anyhow::bail!("LOADER_TRACE_DIAGNOSTIC_ONLY: broker evidence saved; normal validation requires a fresh run without this feature");
+    }
+    if cfg!(feature = "lab-loader-probe") {
+        anyhow::bail!("LOADER_PROBE_DIAGNOSTIC_ONLY: original Python and probe evidence saved; normal Python validation still required");
     }
     let result = launched?;
     ensure!(
@@ -436,6 +435,80 @@ fn dispatch() -> Result<()> {
         "accountSid":expected_sid,"limitations":["not adversarial validation","job observation proves job membership, not exact outer job identity","same-account startup race remains a production blocker","no traffic enforcement test"]});
     fresh_write(
         &path(r"trusted\result-evidence.json"),
+        &serde_json::to_vec_pretty(&evidence)?,
+    )?;
+    Ok(())
+}
+type ObserverThread = std::thread::JoinHandle<(Vec<Observed>, Option<String>)>;
+fn start_observer(expected_sid: String) -> (Arc<AtomicBool>, ObserverThread) {
+    let done = Arc::new(AtomicBool::new(false));
+    let finished = done.clone();
+    let observed_sid = expected_sid;
+    let observer = std::thread::spawn(move || -> (Vec<Observed>, Option<String>) {
+        let mut found = BTreeMap::new();
+        while !finished.load(Ordering::SeqCst) {
+            match observe(&observed_sid) {
+                Ok(batch) => {
+                    for item in batch {
+                        found.entry(item.pid).or_insert(item);
+                    }
+                }
+                Err(error) => return (found.into_values().collect(), Some(format!("{error:#}"))),
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        (found.into_values().collect(), None)
+    });
+    (done, observer)
+}
+#[cfg(feature = "lab-loader-probe")]
+fn loader_probe_differential(
+    expected_sid: &str,
+    original: &Result<pi_windows_sandbox::protocol::RunResult>,
+) -> Result<()> {
+    let eligible = original.as_ref().is_ok_and(|r| {
+        r.exit_code == 0xC0000142
+            && r.stop_reason == StopReason::Exited
+            && r.cleanup_verified
+            && r.terminated
+            && !r.timed_out
+            && !r.truncated
+    });
+    if !eligible {
+        return fresh_write(
+            &path(r"trusted\loader-probe-evidence.json"),
+            &serde_json::to_vec_pretty(
+                &serde_json::json!({"diagnosticOnly":true,"status":"notRun","reason":"original-outcome-or-cleanup-not-eligible"}),
+            )?,
+        );
+    }
+    ensure!(
+        observe(expected_sid)?.is_empty(),
+        "probe refuses preexisting dedicated-account processes"
+    );
+    network::verify_offline_protection(expected_sid)?;
+    eprintln!("loader_probe_differential phase=begin diagnostic_only=true");
+    let mut req = request()?;
+    req.argv = vec![path(r"trusted\loader_probe.exe").display().to_string()];
+    let (done, observer) = start_observer(expected_sid.to_owned());
+    let result = unsafe {
+        broker::run_via_dedicated_helper(
+            &path("store"),
+            &path(r"trusted\pi-windows-sandbox.exe"),
+            req,
+        )
+    };
+    done.store(true, Ordering::SeqCst);
+    let (observations, observer_error) = match observer.join() {
+        Ok(report) => report,
+        Err(_) => (vec![], Some("probe observer panicked".into())),
+    };
+    let evidence = serde_json::json!({"diagnosticOnly":true,"normalValidationEligible":false,
+        "run":result.as_ref().ok(),"launchError":result.as_ref().err().map(|e|format!("{e:#}")),
+        "exitCodeHex":result.as_ref().ok().map(|r|format!("0x{:08X}",r.exit_code)),"observerError":observer_error,
+        "observed":observations.iter().map(|o|serde_json::json!({"pid":o.pid,"image":o.image,"sid":o.sid,"restricted":o.restricted,"inJob":o.in_job,"exited":o.exited()})).collect::<Vec<_>>()});
+    fresh_write(
+        &path(r"trusted\loader-probe-evidence.json"),
         &serde_json::to_vec_pretty(&evidence)?,
     )?;
     Ok(())

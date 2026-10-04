@@ -158,3 +158,12 @@ It does not attach, access target memory/context, inject, grant privileges or
 relax isolation. Diagnostic builds are categorically ineligible for normal lab
 success; a fresh non-debug run is mandatory afterward. This new product code is
 not upstream-validated behavior.
+
+## CRT-free loader differential
+
+A separate fixed C probe is built without CRT/default libraries and must pass an
+x64/Kernel32-only import check. Its exact staged image is hash-pinned. After the
+original Python DLL-init failure and verified cleanup, a diagnostic-only mode runs
+this probe with the same sandbox construction but fresh per-run helper/capability.
+Fixed absolute dependency loads report numeric stages without exports or policy
+changes. Original evidence is preserved; normal Python validation remains mandatory.

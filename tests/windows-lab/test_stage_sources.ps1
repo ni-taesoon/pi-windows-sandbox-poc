@@ -71,4 +71,14 @@ Assert-Rejected 'C:\Lab\build\pi-windows-sandbox.exe' 'helper-executable'
 Add-Node 'C:\Lab\build\pi-windows-sandbox.exe' $false
 Add-Node 'C:\Lab\build\examples' $true $true
 Assert-Rejected 'C:\Lab\build\examples' 'driver-executable'
+# The optional probe is one extra fixed input, not an arbitrary build-tree scan.
+Add-Node 'C:\Lab\build\examples' $true
+Add-Node 'C:\Lab\build\loader_probe.exe' $false
+$probeSelection=Get-LabStageSources -PythonHome 'C:\Lab\python' -BuildDirectory 'C:\Lab\build' -IncludeLoaderProbe
+if ($probeSelection.probe -ne 'C:\Lab\build\loader_probe.exe') { throw 'Fixed probe selection missing.' }
+Add-Node 'C:\Lab\build\loader_probe.exe' $false $true
+$probeError=$null
+try { $null=Get-LabStageSources -PythonHome 'C:\Lab\python' -BuildDirectory 'C:\Lab\build' -IncludeLoaderProbe }
+catch { $probeError=$_.Exception.Message }
+if (-not $probeError -or -not $probeError.StartsWith('Reparse-containing stage source refused: ')) { throw 'Probe reparse was not refused.' }
 Write-Output 'MOCK_SELECTOR_PASS: exact unused root alias excluded without target access; required interpreter, nested alias, directory masquerade and unknown links rejected; copied input selection and runtime/helper/ancestor refusal. No native sandbox execution.'

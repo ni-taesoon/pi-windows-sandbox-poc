@@ -106,8 +106,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Official Rust toolchain setup failed.' }
           rustup run stable rustc --version --verbose | Tee-Object -FilePath lab-evidence/toolchain.txt
           if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain unavailable.' }
-          rustup run stable cargo build --locked --target x86_64-pc-windows-msvc --manifest-path native/windows-sandbox/Cargo.toml --bin pi-windows-sandbox --example python_lab --features lab-loader-trace 2>&1 | Tee-Object -FilePath lab-evidence/build.log
+          rustup run stable cargo build --locked --target x86_64-pc-windows-msvc --manifest-path native/windows-sandbox/Cargo.toml --bin pi-windows-sandbox --example python_lab --features lab-loader-probe 2>&1 | Tee-Object -FilePath lab-evidence/build.log
           if ($LASTEXITCODE -ne 0) { throw 'Native build/link failed; no launch.' }
+          ./scripts/build_windows_loader_probe.ps1 2>&1 | Tee-Object -FilePath lab-evidence/loader-probe-build.log
           $build = "$PWD/native/windows-sandbox/target/x86_64-pc-windows-msvc/debug"
           [ordered]@{
             sourceCommit = $env:SOURCE_SHA
@@ -116,6 +117,7 @@ jobs:
             driverSha256 = (Get-FileHash "$build/examples/python_lab.exe" -Algorithm SHA256).Hash
             helperSha256 = (Get-FileHash "$build/pi-windows-sandbox.exe" -Algorithm SHA256).Hash
             pythonSha256 = (Get-FileHash "$env:pythonLocation/python.exe" -Algorithm SHA256).Hash
+            probeSha256 = (Get-FileHash "$build/loader_probe.exe" -Algorithm SHA256).Hash
             provenance = 'Trusted pinned-source build and official setup-python runtime; hashes do not independently prove compiler or package provenance.'
           } | ConvertTo-Json | Set-Content lab-evidence/build-identity.json
       - name: Mocked selector regression (no filesystem or security mutation)
@@ -129,7 +131,7 @@ jobs:
           ./scripts/stage_windows_python_lab.ps1 -Phase Stage -ApprovedDisposableVm `
             -PythonHome $env:pythonLocation -BuildDirectory "$PWD/native/windows-sandbox/target/x86_64-pc-windows-msvc/debug" `
             -ExpectedDriverSha256 $identity.driverSha256 -ExpectedHelperSha256 $identity.helperSha256 `
-            -ExpectedPythonSha256 $identity.pythonSha256 -ApprovedSourceSha256 $identity.sourceManifestSha256 2>&1 | Tee-Object -FilePath lab-evidence/stage.log
+            -ExpectedPythonSha256 $identity.pythonSha256 -ExpectedProbeSha256 $identity.probeSha256 -ApprovedSourceSha256 $identity.sourceManifestSha256 2>&1 | Tee-Object -FilePath lab-evidence/stage.log
       - name: Approved fresh account and product offline protection setup
         id: setup
         run: |
@@ -161,7 +163,7 @@ jobs:
         env:
           FINAL_DISABLE_OUTCOME: ${{ steps.disable.outcome }}
         run: |
-          foreach ($name in @('stage-evidence.json','baseline.json','run-evidence.json','recovery-evidence.json','result-evidence.json','summary-evidence.json')) {
+          foreach ($name in @('stage-evidence.json','baseline.json','run-evidence.json','recovery-evidence.json','result-evidence.json','summary-evidence.json','loader-probe-evidence.json')) {
             $source = Join-Path 'C:\PiSandboxLab\trusted' $name
             if (Test-Path -LiteralPath $source -PathType Leaf) {
               if ((Get-Item -LiteralPath $source).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Evidence reparse refused.' }
@@ -175,7 +177,7 @@ jobs:
           } else {
             'No LAB_SMOKE_PASS evidence was produced. Inspect the failing step and named logs.' | Add-Content $env:GITHUB_STEP_SUMMARY
           }
-          'LOADER TRACE DIAGNOSTIC ONLY: debugger timing/state differs; no normal LAB_SMOKE_PASS is eligible. Remove lab-loader-trace feature and rerun fresh for normal validation.' | Add-Content $env:GITHUB_STEP_SUMMARY
+          'LOADER PROBE DIAGNOSTIC ONLY: normal Python failure is preserved before a same-restriction fixed native probe. No normal LAB_SMOKE_PASS is eligible; remove lab-loader-probe and rerun fresh for final Python validation.' | Add-Content $env:GITHUB_STEP_SUMMARY
           'LAB ONLY. Production activation stays false. No adversarial deny/escape/network validation. Fresh hosted VM must be disposed by job teardown; no VM reuse or in-job automatic retry.' | Add-Content $env:GITHUB_STEP_SUMMARY
       - name: Retain named safe evidence (never the credential store or root)
         if: always()
@@ -205,3 +207,5 @@ jobs:
             lab-evidence/run-window.json
             lab-evidence/pe-imports.json
             lab-evidence/loader-events.json
+            lab-evidence/loader-probe-build.log
+            lab-evidence/loader-probe-evidence.json

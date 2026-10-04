@@ -32,13 +32,16 @@ function Assert-LabSourceAncestors {
   }
 }
 function Get-LabStageSources {
-  param([Parameter(Mandatory=$true)][string]$PythonHome, [Parameter(Mandatory=$true)][string]$BuildDirectory)
+  param([Parameter(Mandatory=$true)][string]$PythonHome, [Parameter(Mandatory=$true)][string]$BuildDirectory, [switch]$IncludeLoaderProbe)
   # GetFullPath normalizes lexical spelling without resolving junction targets.
   $runtime = [IO.Path]::GetFullPath($PythonHome).TrimEnd('\')
   $build = [IO.Path]::GetFullPath($BuildDirectory).TrimEnd('\')
   $helper = Join-Path $build 'pi-windows-sandbox.exe'
   $driver = Join-Path $build 'examples\python_lab.exe'
-  foreach ($sourceSpec in @(@($helper, 'helper-executable'), @($driver, 'driver-executable'))) {
+  $probe = $null
+  $selected = @(@($helper, 'helper-executable'), @($driver, 'driver-executable'))
+  if ($IncludeLoaderProbe) { $probe=Join-Path $build 'loader_probe.exe'; $selected += ,@($probe,'loader-probe-executable') }
+  foreach ($sourceSpec in $selected) {
     Assert-LabSourceAncestors -Path $sourceSpec[0] -Role $sourceSpec[1]
     if ((Get-Item -LiteralPath $sourceSpec[0] -Force).PSIsContainer) { throw "Executable source is a directory: $($sourceSpec[0])" }
   }
@@ -78,5 +81,5 @@ function Get-LabStageSources {
     }
   }
   if (-not ($entries | Where-Object { $_.relative -eq 'python.exe' -and -not $_.isDirectory })) { throw 'Missing existing official runner Python runtime.' }
-  [pscustomobject]@{ runtimeRoot=$runtime; helper=$helper; driver=$driver; runtimeEntries=$entries.ToArray(); skippedRuntimeEntries=$skipped.ToArray() }
+  [pscustomobject]@{ runtimeRoot=$runtime; helper=$helper; driver=$driver; probe=$probe; runtimeEntries=$entries.ToArray(); skippedRuntimeEntries=$skipped.ToArray() }
 }
