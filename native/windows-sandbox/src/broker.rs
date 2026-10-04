@@ -413,6 +413,18 @@ pub fn helper_main(name: &str, expected_broker: u32) -> Result<()> {
             base.raw(),
             &[cap.as_ptr()],
         )?)?;
+        // This is the one-shot dedicated helper, not the owner/broker process.
+        // Preserve all existing bits; child startup errors must not wait on an
+        // invisible critical-error dialog on the isolated desktop. WER behavior,
+        // console flags and security policy are deliberately unchanged.
+        use windows_sys::Win32::System::Diagnostics::Debug::{
+            GetErrorMode, SetErrorMode, SEM_FAILCRITICALERRORS,
+        };
+        SetErrorMode(GetErrorMode() | SEM_FAILCRITICALERRORS);
+        ensure!(
+            GetErrorMode() & SEM_FAILCRITICALERRORS != 0,
+            "helper critical-error mode was not set"
+        );
         let result = crate::process::run_restricted_with_parent(
             restricted.raw(),
             &payload.private_desktop,

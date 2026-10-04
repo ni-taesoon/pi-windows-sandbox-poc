@@ -1,4 +1,7 @@
+#[path = "output_contract.rs"]
+mod output_contract;
 use anyhow::{ensure, Context, Result};
+use base64::Engine;
 use pi_windows_sandbox::{
     acl, broker, network,
     process::Handle,
@@ -28,7 +31,7 @@ use windows_sys::Win32::{
     System::{Diagnostics::ToolHelp::*, JobObjects::*, Threading::*},
 };
 const ROOT: &str = r"C:\PiSandboxLab";
-const SCRIPT: &str = "import pathlib, time\np = pathlib.Path('result.txt')\np.write_bytes(b'PI_WINDOWS_PYTHON_LAB_OK\\n')\nassert p.read_bytes() == b'PI_WINDOWS_PYTHON_LAB_OK\\n'\nprint('PI_WINDOWS_PYTHON_LAB_OK', flush=True)\ntime.sleep(3)\n";
+const SCRIPT: &str = "print('PI_LAB_SCRIPT_ENTERED', flush=True)\nimport pathlib, time\nprint('PI_LAB_IMPORTS_READY', flush=True)\np = pathlib.Path('result.txt')\np.write_bytes(b'PI_WINDOWS_PYTHON_LAB_OK\\n')\nassert p.read_bytes() == b'PI_WINDOWS_PYTHON_LAB_OK\\n'\nprint('PI_WINDOWS_PYTHON_LAB_OK', flush=True)\ntime.sleep(3)\n";
 const OUTPUT: &[u8] = b"PI_WINDOWS_PYTHON_LAB_OK\n";
 fn path(s: &str) -> PathBuf {
     Path::new(ROOT).join(s)
@@ -366,7 +369,7 @@ fn dispatch() -> Result<()> {
     // remains mandatory; retained policy ACEs on failed cleanup are not removed.
 
     let observations = observed?;
-    let raw = serde_json::json!({"scope":"LAB_ONLY", "nativeValidated":false,"accountSid":expected_sid,"run":launched.as_ref().ok(),"launchError":launched.as_ref().err().map(|e|format!("{e:#}")),"observed":observations.iter().map(|o| serde_json::json!({"pid":o.pid,"parentPid":o.parent_pid,"image":o.image,"sid":o.sid,"restricted":o.restricted,"inJob":o.in_job,"exited":o.exited()})).collect::<Vec<_>>()});
+    let raw = serde_json::json!({"scope":"LAB_ONLY", "nativeValidated":false,"accountSid":expected_sid,"run":launched.as_ref().ok(),"launchError":launched.as_ref().err().map(|e|format!("{e:#}")),"exitCodeHex":launched.as_ref().ok().map(|r|format!("0x{:08X}",r.exit_code)),"observed":observations.iter().map(|o| serde_json::json!({"pid":o.pid,"parentPid":o.parent_pid,"image":o.image,"sid":o.sid,"restricted":o.restricted,"inJob":o.in_job,"exited":o.exited()})).collect::<Vec<_>>()});
     fresh_write(
         &path(r"trusted\run-evidence.json"),
         &serde_json::to_vec_pretty(&raw)?,
@@ -380,6 +383,13 @@ fn dispatch() -> Result<()> {
             && !result.timed_out
             && !result.truncated,
         "Python/broker failed"
+    );
+    let stdout = base64::engine::general_purpose::STANDARD
+        .decode(&result.stdout_base64)
+        .context("invalid Python stdout encoding")?;
+    ensure!(
+        output_contract::matches_stdout(&stdout),
+        "fixed Python stdout contract not completed"
     );
     ensure!(
         observations.iter().any(|o| o

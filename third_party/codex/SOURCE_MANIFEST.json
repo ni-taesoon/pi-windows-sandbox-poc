@@ -41,7 +41,7 @@
           "sha256": "2630fa3d2d033005343448b13981516bf7b0f72457bb5eb6abb0cde09592c4e2"
         }
       ],
-      "adapted_sha256": "2f614349fc1b00e438da1bac6941e05b9495e18cf0bf37d6b19f7483b1785d7d"
+      "adapted_sha256": "5312b3404fcf8a1206b2786dd66ced308c26c0dead583950f83aefa7d66601a8"
     },
     {
       "destination": "native/windows-sandbox/src/desktop.rs",
