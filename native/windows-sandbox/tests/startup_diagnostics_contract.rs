@@ -56,6 +56,6 @@ fn diagnostics_are_reported_before_workload_and_share_original_deadline() {
         helper.find("&startup_diagnostics,").unwrap()
             < helper.find("process::run_restricted_with_parent").unwrap()
     );
-    assert_eq!(BROKER.matches(".receive(response_deadline)").count(), 2);
+    assert_eq!(BROKER.matches(".receive(response_deadline)").count(), 3); // third frame is diagnostic-feature-only
     assert!(BROKER.contains("helper_startup_access={}"));
 }

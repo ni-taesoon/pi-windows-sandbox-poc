@@ -163,6 +163,32 @@ pub(crate) unsafe fn run_restricted_with_parent(
     request: &RunRequest,
     parent: &Handle,
 ) -> Result<RunResult> {
+    run_impl(
+        token,
+        private_desktop,
+        request,
+        parent,
+        #[cfg(feature = "lab-loader-trace")]
+        None,
+    )
+}
+#[cfg(feature = "lab-loader-trace")]
+pub(crate) unsafe fn run_restricted_with_parent_trace(
+    token: HANDLE,
+    private_desktop: &str,
+    request: &RunRequest,
+    parent: &Handle,
+    trace: &mut crate::loader_trace::LoaderTrace,
+) -> Result<RunResult> {
+    run_impl(token, private_desktop, request, parent, Some(trace))
+}
+unsafe fn run_impl(
+    token: HANDLE,
+    private_desktop: &str,
+    request: &RunRequest,
+    parent: &Handle,
+    #[cfg(feature = "lab-loader-trace")] trace: Option<&mut crate::loader_trace::LoaderTrace>,
+) -> Result<RunResult> {
     request.validate()?;
     ensure!(token != 0 && token != INVALID_HANDLE_VALUE, "invalid token");
     ensure!(
@@ -221,6 +247,15 @@ pub(crate) unsafe fn run_restricted_with_parent(
         env.push(0);
     }
     let mut info: PROCESS_INFORMATION = std::mem::zeroed();
+    let creation_flags =
+        EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW;
+    #[cfg(feature = "lab-loader-trace")]
+    let creation_flags = creation_flags
+        | if trace.is_some() {
+            DEBUG_ONLY_THIS_PROCESS
+        } else {
+            0
+        };
     win(CreateProcessAsUserW(
         token,
         executable.as_ptr(),
@@ -228,7 +263,7 @@ pub(crate) unsafe fn run_restricted_with_parent(
         null(),
         null(),
         1,
-        EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW,
+        creation_flags,
         env.as_ptr().cast::<c_void>(),
         cwd.as_ptr(),
         &startup.StartupInfo,
@@ -259,10 +294,24 @@ pub(crate) unsafe fn run_restricted_with_parent(
             offset += written as usize;
         }
     });
+    #[cfg(feature = "lab-loader-trace")]
+    let mut debugger =
+        trace.map(|trace| crate::loader_trace::DebugPump::new(info.dwProcessId, job.raw(), trace));
     let start = Instant::now();
     let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
     let (mut timed_out, mut truncated) = (false, false);
-    let stop_reason = loop {
+    let loop_result: Result<StopReason> = (|| loop {
+        #[cfg(feature = "lab-loader-trace")]
+        if let Some(debugger) = &mut debugger {
+            debugger.poll(0)?;
+            if debugger.limit_reached() {
+                truncated = true;
+                break Ok(StopReason::OutputLimit);
+            }
+            if debugger.exited() {
+                break Ok(StopReason::Exited);
+            }
+        }
         drain(
             &stdout_read,
             &mut stdout,
@@ -276,25 +325,48 @@ pub(crate) unsafe fn run_restricted_with_parent(
             &mut truncated,
         )?;
         if truncated {
-            break StopReason::OutputLimit;
+            break Ok(StopReason::OutputLimit);
         }
         if WaitForSingleObject(parent.raw(), 0) != WAIT_TIMEOUT {
-            break StopReason::ParentDeath;
+            break Ok(StopReason::ParentDeath);
         }
         match WaitForSingleObject(process.raw(), 0) {
-            WAIT_OBJECT_0 => break StopReason::Exited,
+            WAIT_OBJECT_0 => {
+                #[cfg(feature = "lab-loader-trace")]
+                if debugger.is_none() {
+                    break Ok(StopReason::Exited);
+                }
+                #[cfg(not(feature = "lab-loader-trace"))]
+                break Ok(StopReason::Exited);
+            }
             WAIT_TIMEOUT => {}
             _ => anyhow::bail!("process wait failed"),
         }
         timed_out = start.elapsed() >= Duration::from_millis(request.timeout_ms.into());
         if timed_out {
-            break StopReason::Timeout;
+            break Ok(StopReason::Timeout);
         }
         std::thread::sleep(Duration::from_millis(5));
-    };
+    })();
+    #[cfg(feature = "lab-loader-trace")]
+    if let Some(debugger) = &mut debugger {
+        debugger.begin_cleanup(Instant::now() + Duration::from_secs(5));
+    }
     job.terminate()?; // Also terminate descendants after a normal root exit.
     let cleanup = Instant::now();
-    while job.active_processes()? != 0 {
+    loop {
+        #[cfg(feature = "lab-loader-trace")]
+        if let Some(debugger) = &mut debugger {
+            debugger.poll(10)?;
+        }
+        let mut finished = job.active_processes()? == 0;
+        #[cfg(feature = "lab-loader-trace")]
+        if let Some(debugger) = &debugger {
+            finished &= debugger.exited();
+        }
+        if finished {
+            break;
+        }
         ensure!(
             cleanup.elapsed() < Duration::from_secs(5),
             "job cleanup unverified"
@@ -305,6 +377,11 @@ pub(crate) unsafe fn run_restricted_with_parent(
         WaitForSingleObject(process.raw(), 5000) == WAIT_OBJECT_0,
         "root exit unverified"
     );
+    #[cfg(feature = "lab-loader-trace")]
+    if let Some(debugger) = &mut debugger {
+        debugger.verified_cleanup();
+    }
+    let stop_reason = loop_result?;
     let mut exit_code = 1;
     win(GetExitCodeProcess(process.raw(), &mut exit_code))?;
     ensure!(

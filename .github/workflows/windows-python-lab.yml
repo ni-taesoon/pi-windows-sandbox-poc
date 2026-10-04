@@ -106,7 +106,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Official Rust toolchain setup failed.' }
           rustup run stable rustc --version --verbose | Tee-Object -FilePath lab-evidence/toolchain.txt
           if ($LASTEXITCODE -ne 0) { throw 'Rust toolchain unavailable.' }
-          rustup run stable cargo build --locked --target x86_64-pc-windows-msvc --manifest-path native/windows-sandbox/Cargo.toml --bin pi-windows-sandbox --example python_lab 2>&1 | Tee-Object -FilePath lab-evidence/build.log
+          rustup run stable cargo build --locked --target x86_64-pc-windows-msvc --manifest-path native/windows-sandbox/Cargo.toml --bin pi-windows-sandbox --example python_lab --features lab-loader-trace 2>&1 | Tee-Object -FilePath lab-evidence/build.log
           if ($LASTEXITCODE -ne 0) { throw 'Native build/link failed; no launch.' }
           $build = "$PWD/native/windows-sandbox/target/x86_64-pc-windows-msvc/debug"
           [ordered]@{
@@ -175,6 +175,7 @@ jobs:
           } else {
             'No LAB_SMOKE_PASS evidence was produced. Inspect the failing step and named logs.' | Add-Content $env:GITHUB_STEP_SUMMARY
           }
+          'LOADER TRACE DIAGNOSTIC ONLY: debugger timing/state differs; no normal LAB_SMOKE_PASS is eligible. Remove lab-loader-trace feature and rerun fresh for normal validation.' | Add-Content $env:GITHUB_STEP_SUMMARY
           'LAB ONLY. Production activation stays false. No adversarial deny/escape/network validation. Fresh hosted VM must be disposed by job teardown; no VM reuse or in-job automatic retry.' | Add-Content $env:GITHUB_STEP_SUMMARY
       - name: Retain named safe evidence (never the credential store or root)
         if: always()

@@ -148,3 +148,13 @@ New product diagnostic scripts read staged PE import metadata and narrowly bound
 existing Windows event records after the fixed run. Provider/schema/path/time
 attribution is fail-closed; only sanitized fields are retained. No tracing,
 debugging, baseline workload, privilege or executable behavior changes are made.
+
+## Opt-in loader debugger diagnostic
+
+A default-off lab feature observes the fixed restricted Python through
+DEBUG_ONLY_THIS_PROCESS. It pumps and continues bounded debug events, preserves
+job/deadline cleanup, and exports only sanitized event/module/status metadata.
+It does not attach, access target memory/context, inject, grant privileges or
+relax isolation. Diagnostic builds are categorically ineligible for normal lab
+success; a fresh non-debug run is mandatory afterward. This new product code is
+not upstream-validated behavior.

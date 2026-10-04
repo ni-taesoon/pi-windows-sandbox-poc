@@ -41,7 +41,7 @@
           "sha256": "2630fa3d2d033005343448b13981516bf7b0f72457bb5eb6abb0cde09592c4e2"
         }
       ],
-      "adapted_sha256": "43d613142d0f831b3c084d998a5995f086e7b6072855dfa717c7d341d0a8dd0d"
+      "adapted_sha256": "da70713258833a3c2711dec3d1d6c34657e05de612632520f0b8512887c7cc33"
     },
     {
       "destination": "native/windows-sandbox/src/desktop.rs",
@@ -57,7 +57,7 @@
       "destination": "native/windows-sandbox/src/lib.rs",
       "upstream": [],
       "origin": "new product integration source",
-      "adapted_sha256": "24f7e620b0a20016d07fdfbe4b6b6eb8aad358cf43c6d14fb957b1837d1f9b74"
+      "adapted_sha256": "2f6372a5e3384e449aab0aa6c3b6a5d78758131978e3c9534b09f07481fb174f"
     },
     {
       "destination": "native/windows-sandbox/src/main.rs",
@@ -129,7 +129,7 @@
           "sha256": "df54d9d966509871403c5237412a3c7ff17cbdb9766b9690438f27c3b683bdcf"
         }
       ],
-      "adapted_sha256": "401e3aebdda0186a30c3ea6c294d6a6b2d0f3d88e17221d591dc5084d5e05a6a"
+      "adapted_sha256": "415166b9d86ec6f42f58b7139932a9dd159bac222cfebd518fa21a402f029b73"
     },
     {
       "destination": "native/windows-sandbox/src/protocol.rs",
@@ -272,6 +272,12 @@
       "upstream": [],
       "origin": "new product integration source",
       "adapted_sha256": "4d435a7b71248569bb044ef0d9209a83a0041406d520441fcd2f2af11edf7bb0"
+    },
+    {
+      "destination": "native/windows-sandbox/src/loader_trace.rs",
+      "upstream": [],
+      "origin": "new product integration source",
+      "adapted_sha256": "2a2462242a1b7d366893c82ca9e60ff95b5ea051f77d445d32ff60f92b4126d0"
     }
   ]
 }

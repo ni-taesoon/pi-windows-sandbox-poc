@@ -11,6 +11,8 @@ pub mod admission;
 pub mod broker;
 #[cfg(windows)]
 pub mod desktop;
+#[cfg(all(windows, feature = "lab-loader-trace"))]
+mod loader_trace;
 #[cfg(windows)]
 pub mod network;
 #[cfg(windows)]

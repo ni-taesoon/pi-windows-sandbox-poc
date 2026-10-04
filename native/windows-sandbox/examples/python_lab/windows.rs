@@ -377,13 +377,16 @@ fn dispatch() -> Result<()> {
         ),
     };
     // Account recovery still encloses this entire dispatch in main().
-    let raw = serde_json::json!({"scope":"LAB_ONLY", "nativeValidated":false,"accountSid":expected_sid,"run":launched.as_ref().ok(),"launchError":launched.as_ref().err().map(|e|format!("{e:#}")),"exitCodeHex":launched.as_ref().ok().map(|r|format!("0x{:08X}",r.exit_code)),"observerError":observer_error.as_deref(),"observed":observations.iter().map(|o| serde_json::json!({"pid":o.pid,"parentPid":o.parent_pid,"image":o.image,"sid":o.sid,"restricted":o.restricted,"inJob":o.in_job,"exited":o.exited()})).collect::<Vec<_>>()});
+    let raw = serde_json::json!({"scope":"LAB_ONLY", "nativeValidated":false,"loaderTraceDiagnostic":cfg!(feature = "lab-loader-trace"),"accountSid":expected_sid,"run":launched.as_ref().ok(),"launchError":launched.as_ref().err().map(|e|format!("{e:#}")),"exitCodeHex":launched.as_ref().ok().map(|r|format!("0x{:08X}",r.exit_code)),"observerError":observer_error.as_deref(),"observed":observations.iter().map(|o| serde_json::json!({"pid":o.pid,"parentPid":o.parent_pid,"image":o.image,"sid":o.sid,"restricted":o.restricted,"inJob":o.in_job,"exited":o.exited()})).collect::<Vec<_>>()});
     fresh_write(
         &path(r"trusted\run-evidence.json"),
         &serde_json::to_vec_pretty(&raw)?,
     )?;
     if let Some(error) = observer_error {
         anyhow::bail!("independent observer failed: {error}");
+    }
+    if cfg!(feature = "lab-loader-trace") {
+        anyhow::bail!("LOADER_TRACE_DIAGNOSTIC_ONLY: broker evidence saved; normal validation requires a fresh run without this feature");
     }
     let result = launched?;
     ensure!(
