@@ -27,7 +27,7 @@
       "destination": "native/windows-sandbox/src/admission.rs",
       "upstream": [],
       "origin": "new product integration source",
-      "adapted_sha256": "8191da1354691220c949d12a9adc61a601920f9242154e6666b492104af69df0"
+      "adapted_sha256": "3f8f0a9e1e18b74bf0a12f605049e648e17fa2bda1c33872af27d5f7119e1ca3"
     },
     {
       "destination": "native/windows-sandbox/src/broker.rs",
