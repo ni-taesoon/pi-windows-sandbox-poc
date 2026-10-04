@@ -167,3 +167,7 @@ original Python DLL-init failure and verified cleanup, a diagnostic-only mode ru
 this probe with the same sandbox construction but fresh per-run helper/capability.
 Fixed absolute dependency loads report numeric stages without exports or policy
 changes. Original evidence is preserved; normal Python validation remains mandatory.
+
+The CRT-free probe supplies the compiler's range-check failure helper with a
+nonreturning intrinsic fast-fail implementation. This preserves generated checks
+without linking a CRT or disabling /GS; native import verification remains required.

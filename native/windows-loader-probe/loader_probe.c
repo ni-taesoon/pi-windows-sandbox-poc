@@ -2,6 +2,14 @@
 #define _WIN32_WINNT 0x0A00
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <intrin.h>
+
+/* MSVC may emit this helper for checked array indexing even without CRT linkage.
+ * Preserve its fatal range-check semantics; never return or attempt recovery. */
+__declspec(noreturn) void __cdecl __report_rangecheckfailure(void) {
+    __fastfail(FAST_FAIL_RANGE_CHECK_FAILURE);
+}
+
 static char line_buffer[96];
 static WCHAR system_library[32768];
 static const char hex_digits[] = "0123456789ABCDEF";
