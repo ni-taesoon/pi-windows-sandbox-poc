@@ -43,7 +43,9 @@ fn no_attach_memory_context_injection_or_permission_changes() {
 fn debug_event_handle_ownership_and_exception_policy_are_narrow() {
     assert!(TRACE.contains("CloseHandle(file)"));
     assert!(!TRACE.contains("CreateProcessInfo.hProcess"));
-    assert!(!TRACE.contains("CreateProcessInfo.hThread"));
+    // The optional hardware mode borrows this OS-managed handle, never closes it.
+    assert!(!TRACE.contains("CloseHandle(raw.u.CreateProcessInfo.hThread)"));
+    assert!(!include_str!("../src/sechost_breakpoints.rs").contains("CloseHandle("));
     assert!(!TRACE.contains("CreateThread.hThread"));
     assert!(TRACE.contains("exception.dwFirstChance != 0"));
     assert!(TRACE.contains("!self.initial_breakpoint_seen"));
