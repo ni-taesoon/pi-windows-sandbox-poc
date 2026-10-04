@@ -6,7 +6,6 @@ fn probe_is_fixed_native_loader_only_with_safe_output_failures() {
     for forbidden in [
         "GetCommandLine",
         "CreateProcess",
-        "GetProcAddress",
         "Py_Initialize",
         "Py_Main",
         "printf(",
@@ -85,4 +84,32 @@ fn dependency_sequence_is_fixed_bounded_and_precedes_python() {
     assert!(entry.find("\"ws2_32\"").unwrap() < entry.find("\"python312\"").unwrap());
     assert!(PROBE.contains("if (length >= 32767)"));
     assert!(!PROBE.contains("FreeLibrary("));
+}
+
+#[test]
+fn self_access_is_fixed_readonly_and_precedes_sechost() {
+    assert_eq!(PROBE.matches("GetProcAddress(").count(), 1);
+    assert!(PROBE.contains("GetProcAddress(ntdll,\"NtOpenProcessToken\")"));
+    assert!(PROBE.contains("GetModuleHandleW(L\"ntdll.dll\")"));
+    assert!(PROBE.contains("LONG (NTAPI *lab_open_token_fn)(HANDLE, ACCESS_MASK, PHANDLE)"));
+    assert!(PROBE.contains("open_token(GetCurrentProcess(),rights,&token)"));
+    for forbidden in [
+        "SetThreadToken(",
+        "SetTokenInformation(",
+        "AdjustTokenPrivileges(",
+        "DuplicateToken(",
+        "WriteProcessMemory(",
+        "SetSecurityInfo(",
+        "TOKEN_ALL_ACCESS",
+    ] {
+        assert!(!PROBE.contains(forbidden));
+    }
+    let entry = PROBE
+        .split("void WINAPI lab_probe_entry(void) {")
+        .nth(1)
+        .unwrap();
+    assert!(entry.find("self_access();").unwrap() < entry.find("\"sechost\"").unwrap());
+    assert!(PROBE.contains("emit(stage,(DWORD)status)"));
+    assert!(PROBE.contains("CloseHandle(token)"));
+    assert!(PROBE.contains("CloseHandle(handle)"));
 }
