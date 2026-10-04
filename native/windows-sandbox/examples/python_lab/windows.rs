@@ -277,7 +277,7 @@ fn dispatch() -> Result<()> {
         setup::provision_offline_account(&path("store"), &owner)?;
         let result = (|| -> Result<()> {
             let identity = setup::logon_offline_identity(&path("store"), &owner)?;
-            network::verify_offline_protection(r".\PiSandboxOffline", identity.sid())?;
+            network::verify_offline_protection(identity.sid())?;
             fresh_write(
                 &path(r"trusted\baseline.json"),
                 &serde_json::to_vec_pretty(
@@ -349,7 +349,7 @@ fn dispatch() -> Result<()> {
     });
     // Read-only effective rule check immediately before the unsafe broker call.
     let launched = (|| -> Result<_> {
-        network::verify_offline_protection(r".\PiSandboxOffline", &expected_sid)?;
+        network::verify_offline_protection(&expected_sid)?;
         unsafe {
             broker::run_via_dedicated_helper(
                 &path("store"),
