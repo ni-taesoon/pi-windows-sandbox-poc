@@ -1,9 +1,9 @@
 # Disposable Windows lab preparation
 
-Status: **this collector is preparation only; no Windows execution is attested.**
+Status: **this collector is preparation only; no Windows sandbox execution is attested.**
 A separate fixed Python lab driver and manual workflow have since been implemented
-and code-reviewed; see [WINDOWS_PYTHON_LAB.md](WINDOWS_PYTHON_LAB.md). Their Windows
-execution remains pending explicit security-change approval and a manual run.
+and code-reviewed; see [WINDOWS_PYTHON_LAB.md](WINDOWS_PYTHON_LAB.md). The first actual Windows attempt passed MSVC linking but failed staging before
+security changes or Python execution; see the lab guide and preserved run evidence.
 The production `NATIVE_VALIDATED=false` and public `run` rejection must remain unchanged.
 This package does not add a validation override, driver, installer, elevation flow,
 policy mutation, process launcher or network client.

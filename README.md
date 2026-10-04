@@ -89,4 +89,4 @@ python3 -B -m unittest discover -s tests/python-probe -p 'test_*.py' -v
 
 ## 고정 Python 실측 드라이버
 
-[Windows Python lab](docs/WINDOWS_PYTHON_LAB.md)은 별도 수동 워크플로로 한정된 Python 파일 생성 시험을 수행하도록 구현되었습니다. Windows 실행 결과는 아직 없으며, 새 일회용 VM의 계정·ACL·방화벽/WFP 변경에 대한 명시적 승인이 필요합니다. production gate는 계속 false입니다.
+[Windows Python lab](docs/WINDOWS_PYTHON_LAB.md)은 승인된 전용 브랜치 또는 수동 워크플로로 한정된 Python 파일 생성 시험을 수행하도록 구현되었습니다. 첫 Windows 실행에서는 MSVC 빌드·링크를 통과했으나 staging에서 멈췄으며, 새 일회용 VM의 계정·ACL·방화벽/WFP 변경에 대한 명시적 승인이 필요합니다. production gate는 계속 false입니다.

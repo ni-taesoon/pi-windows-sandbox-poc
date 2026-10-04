@@ -63,3 +63,7 @@
 - Electron UI, 설치/업데이트/제거, macOS
 
 public `run`과 JS native backend는 닫힌 상태를 유지합니다. 상태 상수만 true로 바꾸는 것은 미완료 통합이나 Windows 검증을 대체하지 않습니다. `docs/WINDOWS_VALIDATION.md`에 따라 별도 승인된 테스트 환경에서 다음 검증을 진행해야 합니다.
+
+## 첫 실제 Windows 시도 (2026-10-04)
+
+[실행 37189834072](https://github.com/ni-taesoon/pi-windows-sandbox-poc/actions/runs/37189834072)에서 실제 MSVC 빌드·링크가 통과했습니다. Staging의 reparse 거부로 종료됐고, 계정·ACL·방화벽 변경 및 샌드박스 Python 실행은 시작되지 않았습니다. [실측 기록](docs/review-evidence/2026-10-04/python-lab-first-windows-attempt.md)에서 원본 로그와 후속 수정의 한계를 확인하세요.

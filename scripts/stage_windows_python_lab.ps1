@@ -31,18 +31,14 @@ function Invoke-Icacls([string[]]$Arguments) {
 if ($Phase -eq 'Stage') {
   if (Test-Path -LiteralPath $root) { throw 'Existing lab root refused. Start a fresh disposable VM.' }
   if (-not $PythonHome -or -not $BuildDirectory) { throw 'Stage requires explicit PythonHome and BuildDirectory.' }
-  $PythonHome = (Resolve-Path -LiteralPath $PythonHome).Path
-  $BuildDirectory = (Resolve-Path -LiteralPath $BuildDirectory).Path
-  if (-not (Test-Path -LiteralPath "$PythonHome\python.exe")) { throw 'Missing existing official runner Python runtime.' }
-  foreach ($source in @($PythonHome, $BuildDirectory)) {
-    $targets = @((Get-Item -LiteralPath $source)) + @(Get-ChildItem -LiteralPath $source -Recurse -Force)
-    if ($targets | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }) { throw 'Reparse-containing stage source refused.' }
-  }
+  . "$PSScriptRoot/windows_lab_stage_sources.ps1"
+  $selection = Get-LabStageSources -PythonHome $PythonHome -BuildDirectory $BuildDirectory
+  $PythonHome = $selection.runtimeRoot
   $approvedHashes = @($ExpectedDriverSha256, $ExpectedHelperSha256, $ExpectedPythonSha256, $ApprovedSourceSha256)
   if (@($approvedHashes | Where-Object { $_ -notmatch '^[0-9a-fA-F]{64}$' }).Count) { throw 'Explicit approved build/runtime/source SHA256 pins are required.' }
   foreach ($pin in @(
-    @("$BuildDirectory\examples\python_lab.exe", $ExpectedDriverSha256),
-    @("$BuildDirectory\pi-windows-sandbox.exe", $ExpectedHelperSha256),
+    @($selection.driver, $ExpectedDriverSha256),
+    @($selection.helper, $ExpectedHelperSha256),
     @("$PythonHome\python.exe", $ExpectedPythonSha256))) {
     if ((Get-FileHash -Algorithm SHA256 -LiteralPath $pin[0]).Hash -ne $pin[1]) { throw "Approved executable hash mismatch: $($pin[0])" }
   }
@@ -53,10 +49,20 @@ if ($Phase -eq 'Stage') {
   $acl.SetSecurityDescriptorSddlForm("O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;$ownerSid)(A;OICI;FRFX;;;BU)")
   Set-Acl -LiteralPath $root -AclObject $acl
   foreach ($directory in @('trusted','runtime','work')) { New-Item -ItemType Directory -Path "$root\$directory" | Out-Null }
-  Copy-Item -LiteralPath "$BuildDirectory\pi-windows-sandbox.exe" -Destination "$root\trusted\pi-windows-sandbox.exe"
-  Copy-Item -LiteralPath "$BuildDirectory\examples\python_lab.exe" -Destination $driver
+  Copy-Item -LiteralPath $selection.helper -Destination "$root\trusted\pi-windows-sandbox.exe"
+  Copy-Item -LiteralPath $selection.driver -Destination $driver
   # No downloading, package installation, pip, or execution of the source Python.
-  Copy-Item -Path "$PythonHome\*" -Destination "$root\runtime" -Recurse -Force
+  # Consume only the validated breadth-first selection, never a second wildcard
+  # traversal. Recheck each item at copy time; trusted quiescent source remains
+  # a lab assumption rather than a race-free source pinning claim.
+  foreach ($entry in $selection.runtimeEntries) {
+    $item = Get-Item -LiteralPath $entry.source -Force
+    Assert-LabSourceItem -Item $item -Role 'python-runtime-copy'
+    if ([bool]$item.PSIsContainer -ne $entry.isDirectory) { throw "Runtime source type changed: $($entry.source)" }
+    $destination = Join-Path "$root\runtime" $entry.relative
+    if ($entry.isDirectory) { New-Item -ItemType Directory -Path $destination | Out-Null }
+    else { Copy-Item -LiteralPath $entry.source -Destination $destination }
+  }
   foreach ($pin in @(
     @($driver, $ExpectedDriverSha256),
     @("$root\trusted\pi-windows-sandbox.exe", $ExpectedHelperSha256),
