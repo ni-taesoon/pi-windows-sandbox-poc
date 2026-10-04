@@ -340,15 +340,20 @@ fn dispatch() -> Result<()> {
     let done = Arc::new(AtomicBool::new(false));
     let finished = done.clone();
     let observed_sid = expected_sid.clone();
-    let observer = std::thread::spawn(move || -> Result<Vec<Observed>> {
+    let observer = std::thread::spawn(move || -> (Vec<Observed>, Option<String>) {
         let mut found = BTreeMap::new();
         while !finished.load(Ordering::SeqCst) {
-            for item in observe(&observed_sid)? {
-                found.entry(item.pid).or_insert(item);
+            match observe(&observed_sid) {
+                Ok(batch) => {
+                    for item in batch {
+                        found.entry(item.pid).or_insert(item);
+                    }
+                }
+                Err(error) => return (found.into_values().collect(), Some(format!("{error:#}"))),
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        Ok(found.into_values().collect())
+        (found.into_values().collect(), None)
     });
     // Read-only effective rule check immediately before the unsafe broker call.
     let launched = (|| -> Result<_> {
@@ -362,18 +367,24 @@ fn dispatch() -> Result<()> {
         }
     })();
     done.store(true, Ordering::SeqCst);
-    let observed = observer
-        .join()
-        .map_err(|_| anyhow::anyhow!("observer panicked"))?;
-    // Always disable owned account after the single launch attempt. VM disposal
-    // remains mandatory; retained policy ACEs on failed cleanup are not removed.
-
-    let observations = observed?;
-    let raw = serde_json::json!({"scope":"LAB_ONLY", "nativeValidated":false,"accountSid":expected_sid,"run":launched.as_ref().ok(),"launchError":launched.as_ref().err().map(|e|format!("{e:#}")),"exitCodeHex":launched.as_ref().ok().map(|r|format!("0x{:08X}",r.exit_code)),"observed":observations.iter().map(|o| serde_json::json!({"pid":o.pid,"parentPid":o.parent_pid,"image":o.image,"sid":o.sid,"restricted":o.restricted,"inJob":o.in_job,"exited":o.exited()})).collect::<Vec<_>>()});
+    // Never propagate an observer error/panic before preserving the broker
+    // outcome. Partial samples are diagnostic only, not substitute identity proof.
+    let (observations, observer_error) = match observer.join() {
+        Ok(report) => report,
+        Err(_) => (
+            Vec::new(),
+            Some("observer.phase=join; status=panic".to_owned()),
+        ),
+    };
+    // Account recovery still encloses this entire dispatch in main().
+    let raw = serde_json::json!({"scope":"LAB_ONLY", "nativeValidated":false,"accountSid":expected_sid,"run":launched.as_ref().ok(),"launchError":launched.as_ref().err().map(|e|format!("{e:#}")),"exitCodeHex":launched.as_ref().ok().map(|r|format!("0x{:08X}",r.exit_code)),"observerError":observer_error.as_deref(),"observed":observations.iter().map(|o| serde_json::json!({"pid":o.pid,"parentPid":o.parent_pid,"image":o.image,"sid":o.sid,"restricted":o.restricted,"inJob":o.in_job,"exited":o.exited()})).collect::<Vec<_>>()});
     fresh_write(
         &path(r"trusted\run-evidence.json"),
         &serde_json::to_vec_pretty(&raw)?,
     )?;
+    if let Some(error) = observer_error {
+        anyhow::bail!("independent observer failed: {error}");
+    }
     let result = launched?;
     ensure!(
         result.exit_code == 0
@@ -442,6 +453,16 @@ impl Observed {
         unsafe { WaitForSingleObject(self.handle.raw(), 0) == 0 }
     }
 }
+/// The wait is on the same retained handle, never a fresh PID lookup. A signaled
+/// handle is only an exit-race clue; it does not authenticate a missing image.
+unsafe fn observer_api(api: &'static str, ok: i32, process: &Handle) -> Result<()> {
+    if ok == 0 {
+        let code = std::io::Error::last_os_error().raw_os_error().unwrap_or(-1);
+        let wait = WaitForSingleObject(process.raw(), 0);
+        anyhow::bail!("observer API failed: api={api}; win32={code}; retained_handle_wait={wait}");
+    }
+    Ok(())
+}
 fn observe(sid: &str) -> Result<Vec<Observed>> {
     unsafe {
         let snapshot = Handle::from_raw(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0))?;
@@ -468,20 +489,22 @@ fn observe(sid: &str) -> Result<Vec<Observed>> {
                     if actual == sid {
                         let mut image = vec![0u16; 32768];
                         let mut len = image.len() as u32;
-                        ensure!(
+                        observer_api(
+                            "image-query/QueryFullProcessImageNameW",
                             QueryFullProcessImageNameW(
                                 handle.raw(),
                                 0,
                                 image.as_mut_ptr(),
-                                &mut len
-                            ) != 0,
-                            "observer image failed"
-                        );
+                                &mut len,
+                            ),
+                            &handle,
+                        )?;
                         let mut job = 0;
-                        ensure!(
-                            IsProcessInJob(handle.raw(), 0, &mut job) != 0,
-                            "observer job query failed"
-                        );
+                        observer_api(
+                            "job-query/IsProcessInJob",
+                            IsProcessInJob(handle.raw(), 0, &mut job),
+                            &handle,
+                        )?;
                         found.push(Observed {
                             pid: entry.th32ProcessID,
                             parent_pid: entry.th32ParentProcessID,
