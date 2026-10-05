@@ -376,13 +376,18 @@ pub unsafe fn run_via_dedicated_helper(
     let response_deadline = Instant::now()
         + Duration::from_millis(u64::from(payload.request.timeout_ms))
         + Duration::from_secs(15);
-    let startup_diagnostics: crate::startup_diagnostics::StartupDiagnostics = pipe
-        .receive(response_deadline)
-        .context("helper startup diagnostics unavailable")?;
-    eprintln!(
-        "helper_startup_access={}",
-        serde_json::to_string(&startup_diagnostics)?
-    );
+    // This feature omits only observational telemetry on both sides of the pipe.
+    // Admission, identity, token, desktop, network and cleanup enforcement remain unchanged.
+    #[cfg(not(feature = "lab-minimal-load-comparison"))]
+    {
+        let startup_diagnostics: crate::startup_diagnostics::StartupDiagnostics = pipe
+            .receive(response_deadline)
+            .context("helper startup diagnostics unavailable")?;
+        eprintln!(
+            "helper_startup_access={}",
+            serde_json::to_string(&startup_diagnostics)?
+        );
+    }
     #[cfg(feature = "lab-loader-trace")]
     {
         let loader_trace: crate::loader_trace::LoaderTrace = pipe
@@ -441,15 +446,18 @@ pub fn helper_main(name: &str, expected_broker: u32) -> Result<()> {
             GetErrorMode() & SEM_FAILCRITICALERRORS != 0,
             "helper critical-error mode was not set"
         );
-        let startup_diagnostics = crate::startup_diagnostics::inspect(
-            base.raw(),
-            restricted.raw(),
-            &payload.private_desktop,
-        );
-        pipe.send(
-            &startup_diagnostics,
-            Instant::now() + Duration::from_secs(10),
-        )?;
+        #[cfg(not(feature = "lab-minimal-load-comparison"))]
+        {
+            let startup_diagnostics = crate::startup_diagnostics::inspect(
+                base.raw(),
+                restricted.raw(),
+                &payload.private_desktop,
+            );
+            pipe.send(
+                &startup_diagnostics,
+                Instant::now() + Duration::from_secs(10),
+            )?;
+        }
         #[cfg(feature = "lab-loader-trace")]
         let result = {
             let mut trace = crate::loader_trace::LoaderTrace::default();
