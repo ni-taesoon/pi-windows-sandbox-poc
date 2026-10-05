@@ -6,6 +6,7 @@ license = "Apache-2.0"
 [workspace]
 [features]
 default = []
+lab-minimal-load-comparison = []
 lab-loader-trace = []
 lab-loader-probe = []
 lab-sechost-breakpoints = ["lab-loader-trace", "lab-loader-probe"]

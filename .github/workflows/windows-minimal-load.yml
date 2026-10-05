@@ -1,0 +1,209 @@
+name: Windows minimal DLL-load comparison (security changes)
+
+# Only this dedicated branch may run. Neither a push nor a dispatch checkbox
+# grants security authorization. Obtain explicit external action-time approval
+# for this exact reviewed commit and fresh disposable win22 lifecycle first.
+on:
+  push:
+    branches: [lab/minimal-load-comparison]
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: 'Reviewed full lowercase SHA, exactly equal to the selected workflow commit (github.sha)'
+        required: true
+        type: string
+      approved_security_changes:
+        description: 'Prior external approval: fresh win22 VM, PiSandboxOffline, scoped C:\PiSandboxLab ACL/store, product firewall/WFP, fixed comparison, disable/dispose'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  minimal-load-comparison:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_TERM_COLOR: never
+      RUST_BACKTRACE: '0'
+    steps:
+      - name: Guard exact repository, dedicated branch and immutable source
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REPOSITORY: ${{ github.repository }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_SHA: ${{ github.sha }}
+          PUSH_DELETED: ${{ github.event.deleted }}
+          APPROVED_SECURITY_CHANGES: ${{ inputs.approved_security_changes }}
+        run: |
+          if ($env:EVENT_REPOSITORY -cne 'ni-taesoon/pi-windows-sandbox-poc') { throw 'Unexpected repository.' }
+          if ($env:EVENT_REF -cne 'refs/heads/lab/minimal-load-comparison') { throw 'Only the dedicated minimal-load comparison branch is permitted.' }
+          if ($env:EVENT_SHA -cnotmatch '\A[0-9a-f]{40}\z') { throw 'An immutable event SHA is required.' }
+          if ($env:ImageOS -ne 'win22') { throw 'Only fresh Windows Server 2022 hosted runners are in scope.' }
+          if ($env:EVENT_NAME -ceq 'push') {
+            if ($env:PUSH_DELETED -cne 'false') { throw 'Branch deletion or unknown push state is not permitted.' }
+            # The operator must obtain prior external approval before pushing.
+            # A branch name is an execution guard, never authorization evidence.
+          } elseif ($env:EVENT_NAME -ceq 'workflow_dispatch') {
+            if ($env:APPROVED_SECURITY_CHANGES -cne 'true') { throw 'Prior security-change approval was not attested.' }
+            if ($env:SOURCE_SHA -cnotmatch '\A[0-9a-f]{40}\z' -or $env:SOURCE_SHA -cne $env:EVENT_SHA) {
+              throw 'Manual source_sha must exactly match github.sha; mutable refs are refused.'
+            }
+          } else { throw 'Unsupported workflow event.' }
+      - name: Check out immutable event source without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          set-safe-directory: false
+          fetch-depth: 1
+      - name: Materialize LF bytes and verify pinned checkout
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          # Per-command checkout settings only; no global or persistent Git change.
+          git -c core.autocrlf=false -c core.eol=lf checkout-index --force --all
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot materialize byte-stable LF checkout.' }
+          $actual = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $actual -cne $env:SOURCE_SHA) { throw 'Source identity mismatch.' }
+          New-Item -ItemType Directory -Path minimal-load-evidence | Out-Null
+          [ordered]@{
+            sourceCommit=$actual; baselineCommit='c3e82960e5b1ee72e4d228be0b25c19908166731';
+            scope='LAB_MINIMAL_LOAD_COMPARISON'; nativeValidated=$false
+          } | ConvertTo-Json | Set-Content -LiteralPath minimal-load-evidence/source-identity.json -Encoding UTF8
+      - name: Verify frozen source manifest with read-only PowerShell
+        run: |
+          . ./scripts/windows_lab_stage_sources.ps1
+          $repo = [IO.Path]::GetFullPath($PWD.Path)
+          $manifest = Join-Path $repo 'SOURCE_SHA256SUMS.txt'
+          Assert-LabSourceAncestors -Path $manifest -Role 'source-manifest'
+          if ((Get-Item -LiteralPath $manifest).Length -gt 1048576) { throw 'Source manifest exceeds bound.' }
+          $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+          $count = 0
+          foreach ($line in Get-Content -LiteralPath $manifest) {
+            if ($line -cnotmatch '\A([0-9a-f]{64})  ([A-Za-z0-9_./-]+)\z') { throw 'Invalid source manifest entry.' }
+            $expected = $Matches[1]
+            $name = $Matches[2]
+            $parts = @($name.Split('/'))
+            if ([IO.Path]::IsPathRooted($name) -or @($parts | Where-Object { $_ -in @('', '.', '..', '.git', '.aws', '.codex', 'target', 'node_modules') -or $_.EndsWith('.') }).Count -ne 0) { throw 'Unsafe source manifest path.' }
+            if (-not $seen.Add($name)) { throw 'Duplicate or case-colliding source manifest path.' }
+            $path = Join-Path $repo $name
+            Assert-LabSourceAncestors -Path $path -Role 'manifest-source'
+            if ((Get-Item -LiteralPath $path).PSIsContainer) { throw 'Source manifest entry is a directory.' }
+            if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ine $expected) { throw "Source manifest mismatch: $name" }
+            $count++
+          }
+          foreach ($required in @(
+            '.github/workflows/windows-minimal-load.yml',
+            'scripts/build_windows_minimal_load.ps1', 'scripts/stage_windows_minimal_load.ps1',
+            'scripts/windows_lab_stage_sources.ps1', 'native/windows-minimal-load/minimal_load.c',
+            'native/windows-sandbox/Cargo.toml', 'native/windows-sandbox/Cargo.lock',
+            'native/windows-sandbox/examples/minimal_load_comparison.rs',
+            'native/windows-sandbox/examples/minimal_load_comparison/windows.rs',
+            'native/windows-sandbox/examples/minimal_load_comparison/output.rs',
+            'native/windows-sandbox/src/broker.rs', 'native/windows-sandbox/src/lib.rs')) {
+            if (-not $seen.Contains($required)) { throw "Source manifest omits required source: $required" }
+          }
+          if (-not ((Get-Content -LiteralPath native/windows-sandbox/src/lib.rs) -ccontains 'pub const NATIVE_VALIDATED: bool = false;')) { throw 'Production native gate changed.' }
+          [ordered]@{
+            sourceManifestSha256=(Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash;
+            verifiedEntries=$count; allListedFilesMatch=$true; nativeValidated=$false;
+            limitation='Source identity only; hashes do not grant authorization or establish Windows security validation.'
+          } | ConvertTo-Json | Set-Content -LiteralPath minimal-load-evidence/source-manifest-verification.json -Encoding UTF8
+      - name: Build only fixed helper, comparison driver and no-CRT fixture
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          # Use the installed official runner toolchain; no package caches,
+          # tool installers, advanced lab features, or global settings changes.
+          rustup run stable rustc --version --verbose 2>&1 | Tee-Object -FilePath minimal-load-evidence/toolchain.log
+          if ($LASTEXITCODE -ne 0) { throw 'Installed official Rust toolchain unavailable.' }
+          rustup run stable cargo build --locked --no-default-features --features lab-minimal-load-comparison --target x86_64-pc-windows-msvc --manifest-path native/windows-sandbox/Cargo.toml --bin pi-windows-sandbox --example minimal_load_comparison 2>&1 | Tee-Object -FilePath minimal-load-evidence/build.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native build/link failed; no launch.' }
+          ./scripts/build_windows_minimal_load.ps1 2>&1 | Tee-Object -FilePath minimal-load-evidence/minimal-load-build.log
+          $build = "$PWD/native/windows-sandbox/target/x86_64-pc-windows-msvc/debug"
+          [ordered]@{
+            sourceCommit=$env:SOURCE_SHA;
+            sourceManifestSha256=(Get-FileHash -LiteralPath SOURCE_SHA256SUMS.txt -Algorithm SHA256).Hash;
+            lockfileSha256=(Get-FileHash -LiteralPath native/windows-sandbox/Cargo.lock -Algorithm SHA256).Hash;
+            driverSha256=(Get-FileHash -LiteralPath "$build/examples/minimal_load_comparison.exe" -Algorithm SHA256).Hash;
+            helperSha256=(Get-FileHash -LiteralPath "$build/pi-windows-sandbox.exe" -Algorithm SHA256).Hash;
+            minimalLoadSha256=(Get-FileHash -LiteralPath "$build/minimal_load.exe" -Algorithm SHA256).Hash;
+            provenance='Pinned-source build with installed official Rust/MSVC tools; hashes do not independently establish compiler provenance.'
+          } | ConvertTo-Json | Set-Content -LiteralPath minimal-load-evidence/build-identity.json -Encoding UTF8
+      - name: Verify pure result parser before any lab setup
+        run: |
+          rustup run stable cargo test --locked --no-default-features --features lab-minimal-load-comparison --target x86_64-pc-windows-msvc --manifest-path native/windows-sandbox/Cargo.toml --test minimal_load_output_contract 2>&1 | Tee-Object -FilePath minimal-load-evidence/output-contract-tests.log
+          if ($LASTEXITCODE -ne 0) { throw 'Pure result parsing tests failed; no staging or setup.' }
+      - name: Stage exactly three fixed executables in the protected fresh lab
+        id: stage
+        run: |
+          $identity = Get-Content -LiteralPath minimal-load-evidence/build-identity.json -Raw | ConvertFrom-Json
+          ./scripts/stage_windows_minimal_load.ps1 -Phase Stage -ApprovedDisposableVm `
+            -BuildDirectory "$PWD/native/windows-sandbox/target/x86_64-pc-windows-msvc/debug" `
+            -ExpectedDriverSha256 $identity.driverSha256 -ExpectedHelperSha256 $identity.helperSha256 `
+            -ExpectedMinimalLoadSha256 $identity.minimalLoadSha256 -ApprovedSourceSha256 $identity.sourceManifestSha256 `
+            -SourceCommit $identity.sourceCommit 2>&1 | Tee-Object -FilePath minimal-load-evidence/stage.log
+      - name: Set up approved owned account and product offline protection
+        id: setup
+        run: |
+          ./scripts/stage_windows_minimal_load.ps1 -Phase Setup -ApprovedDisposableVm 2>&1 | Tee-Object -FilePath minimal-load-evidence/setup.log
+      - name: Run the fixed minimal-load comparison exactly once
+        id: run
+        run: |
+          ./scripts/stage_windows_minimal_load.ps1 -Phase Run -ApprovedDisposableVm 2>&1 | Tee-Object -FilePath minimal-load-evidence/run.log
+      - name: Always attempt scoped owned-account disable after setup attempt
+        id: disable
+        if: ${{ always() && steps.stage.outcome == 'success' && steps.setup.outcome != 'skipped' }}
+        run: |
+          # Authenticated store selects the owned SID. No deletion, ACL broadening,
+          # namespace replacement, retry, or substitute host launch is permitted.
+          ./scripts/stage_windows_minimal_load.ps1 -Phase Disable -ApprovedDisposableVm 2>&1 | Tee-Object -FilePath minimal-load-evidence/disable.log
+      - name: Copy only named non-secret comparison JSON evidence
+        if: ${{ always() && steps.stage.outcome == 'success' }}
+        env:
+          FINAL_DISABLE_OUTCOME: ${{ steps.disable.outcome }}
+        run: |
+          . ./scripts/windows_lab_stage_sources.ps1
+          foreach ($name in @('minimal-load-stage.json', 'minimal-load-baseline.json', 'minimal-load-control.json', 'minimal-load-run.json', 'minimal-load-recovery.json', 'minimal-load-summary.json')) {
+            $source = Join-Path 'C:\PiSandboxLab\trusted' $name
+            if (Test-Path -LiteralPath $source -PathType Leaf) {
+              Assert-LabSourceAncestors -Path $source -Role 'comparison-evidence'
+              if ((Get-Item -LiteralPath $source).Length -gt 2097152) { throw 'Comparison evidence exceeds bound.' }
+              Copy-Item -LiteralPath $source -Destination (Join-Path 'minimal-load-evidence' $name)
+            }
+          }
+          "Final explicit disable step: $env:FINAL_DISABLE_OUTCOME. Failure requires investigation and disposable VM teardown." | Add-Content $env:GITHUB_STEP_SUMMARY
+          'LAB ONLY: fixed DLL-load compatibility observations. Production activation stays false; no security validation claim. Fresh hosted VM must be disposed by job teardown. No automatic in-job retry.' | Add-Content $env:GITHUB_STEP_SUMMARY
+      - name: Retain only named safe JSON and logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2, official release
+        with:
+          name: windows-minimal-load-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: warn
+          include-hidden-files: false
+          path: |
+            minimal-load-evidence/source-identity.json
+            minimal-load-evidence/source-manifest-verification.json
+            minimal-load-evidence/toolchain.log
+            minimal-load-evidence/build.log
+            minimal-load-evidence/minimal-load-build.log
+            minimal-load-evidence/build-identity.json
+            minimal-load-evidence/output-contract-tests.log
+            minimal-load-evidence/stage.log
+            minimal-load-evidence/setup.log
+            minimal-load-evidence/run.log
+            minimal-load-evidence/disable.log
+            minimal-load-evidence/minimal-load-stage.json
+            minimal-load-evidence/minimal-load-baseline.json
+            minimal-load-evidence/minimal-load-control.json
+            minimal-load-evidence/minimal-load-run.json
+            minimal-load-evidence/minimal-load-recovery.json
+            minimal-load-evidence/minimal-load-summary.json
