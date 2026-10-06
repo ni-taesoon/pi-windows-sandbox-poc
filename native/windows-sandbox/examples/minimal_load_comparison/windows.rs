@@ -3,6 +3,7 @@ use anyhow::{ensure, Context, Result};
 use base64::Engine;
 use pi_windows_sandbox::{
     acl, broker, network, process::Handle,
+    minimal_load::{AccountControlAttempt, FixedLoadRequest},
     protocol::{Policy, RunRequest, RunResult, StopReason}, setup, token, winutil,
 };
 use std::{
@@ -72,7 +73,7 @@ fn fresh_write(p: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-// Retained handles deny write/delete sharing through both fresh-process runs.
+// Retained handles deny write/delete sharing through all three fresh-process runs.
 // Only fixed trusted inputs are read. The target OS DLL is never inspected/copied.
 fn pin_file(p: &Path, pins: &mut Vec<File>, digest: &mut BTreeMap<String, String>) -> Result<()> {
     let metadata = std::fs::symlink_metadata(p)?;
@@ -210,7 +211,16 @@ fn observation(run: &Result<RunResult>) -> Result<output::LoadObservation> {
     let stderr = base64::engine::general_purpose::STANDARD.decode(&run.stderr_base64)?;
     output::parse(run.exit_code, &stdout, &stderr)
 }
-fn run_pair(owner: &str, req: RunRequest, inputs: &BTreeMap<String, String>, pins: &mut Vec<File>) -> Result<()> {
+fn account_run(attempt: Option<&AccountControlAttempt>) -> Result<RunResult> {
+    match attempt {
+        Some(AccountControlAttempt::Recorded { run }) => Ok(run.clone()),
+        Some(AccountControlAttempt::Failed { error }) => Err(anyhow::anyhow!("{error}")),
+        None => Err(anyhow::anyhow!("account control result unavailable")),
+    }
+}
+fn run_comparison(owner: &str, req: RunRequest, inputs: &BTreeMap<String, String>, pins: &mut Vec<File>) -> Result<()> {
+    // Validate before the owner control or any dedicated-account process starts.
+    let fixed_request = FixedLoadRequest::new(req.clone())?;
     let mut ignored = BTreeMap::new();
     pin_file(&path(r"trusted\minimal-load-baseline.json"), pins, &mut ignored)?;
     let baseline: serde_json::Value = serde_json::from_slice(
@@ -218,7 +228,7 @@ fn run_pair(owner: &str, req: RunRequest, inputs: &BTreeMap<String, String>, pin
     ensure!(baseline["ownerSid"] == owner && baseline["inputs"] == serde_json::to_value(inputs)?
         && baseline["policyHash"] == req.policy_hash, "baseline input/owner/policy mismatch");
     ensure!(std::fs::read_dir(path("work"))?.next().is_none(), "fresh empty work directory required");
-    // A create_new marker prevents repeating either process in this lab, including after failure.
+    // A create_new marker prevents repeating any process in this lab, including after failure.
     fresh_write(&path(r"trusted\minimal-load-attempted"), b"one fixed comparison\n")?;
     let identity = setup::logon_offline_identity(&path("store"), owner)?;
     ensure!(baseline["accountSid"] == identity.sid(), "account SID changed");
@@ -237,32 +247,59 @@ fn run_pair(owner: &str, req: RunRequest, inputs: &BTreeMap<String, String>, pin
     ensure!(control.as_ref().is_ok_and(|r| r.terminated && r.cleanup_verified),
         "control cleanup unverified; sandbox not launched");
     network::verify_offline_protection(&account_sid)?;
-    let sandbox = unsafe { broker::run_via_dedicated_helper(
-        &path("store"), &path(r"trusted\pi-windows-sandbox.exe"), req.clone()) };
+    let mut account_attempt = None;
+    let sandbox = unsafe { broker::run_fixed_minimal_load_comparison(
+        &path("store"), &path(r"trusted\pi-windows-sandbox.exe"), fixed_request,
+        &mut |attempt| {
+            account_attempt = Some(attempt.clone());
+            let run = account_run(Some(attempt));
+            let observed = observation(&run);
+            fresh_write(&path(r"trusted\minimal-load-account-control.json"), &serde_json::to_vec_pretty(
+                &serde_json::json!({"diagnosticOnly":true, "normalValidationEligible":false,
+                    "attempt":attempt, "observation":observed.as_ref().ok(),
+                    "observationError":observed.as_ref().err().map(|e|format!("{e:#}")),
+                    "restrictedAttemptAtCapture":if attempt.can_continue() { "RESULT_PENDING" } else { "NOT_ATTEMPTED" }}))?)
+        }) };
+    let account = account_run(account_attempt.as_ref());
+    let account_observation = observation(&account);
     let sandbox_observation = observation(&sandbox);
-    let complete = control_observation.is_ok() && sandbox_observation.is_ok();
+    let complete = control_observation.is_ok() && account_observation.is_ok() && sandbox_observation.is_ok();
     let evidence = serde_json::json!({
         "schemaVersion":1, "scope":"LAB_ONLY", "diagnosticOnly":true,
         "status":if complete { "LOAD_OBSERVATIONS_RECORDED" } else { "INCOMPLETE" },
         "nativeValidated":false, "normalValidationEligible":false, "pythonValidationEligible":false,
         "normalContext":"already-elevated CI owner account",
-        "sandboxContext":"existing dedicated restricted account and private desktop",
+        "accountControlContext":"existing dedicated helper account, ordinary token, shared private desktop, CreateProcessW",
+        "sandboxContext":"same dedicated helper account and private desktop, existing strict token, CreateProcessAsUserW",
+        "dedicatedComparisonDesign":{"sameHelperLogon":true, "samePrivateDesktop":true,
+            "sameAdmission":true, "sameOuterJob":true, "freshInnerJobsWithSameLimits":true,
+            "order":["accountControl", "sandbox"]},
         "sameExecutable":req.argv[0], "environment":req.env, "cwd":req.cwd,
         "dll":r"C:\Windows\System32\bcrypt.dll", "policyHash":req.policy_hash,
         "inputs":inputs,
         "freshLoadComparisonEligible":complete
             && control_observation.as_ref().is_ok_and(|r| !r.preloaded)
+            && account_observation.as_ref().is_ok_and(|r| !r.preloaded)
             && sandbox_observation.as_ref().is_ok_and(|r| !r.preloaded),
         "normal":{"run":control.as_ref().ok(), "launchError":control.as_ref().err().map(|e|format!("{e:#}")),
             "observation":control_observation.as_ref().ok(), "observationError":control_observation.as_ref().err().map(|e|format!("{e:#}"))},
-        "sandbox":{"run":sandbox.as_ref().ok(), "launchError":sandbox.as_ref().err().map(|e|format!("{e:#}")),
+        "accountControl":{"attempt":account_attempt.as_ref(),
+            "observation":account_observation.as_ref().ok(),
+            "observationError":account_observation.as_ref().err().map(|e|format!("{e:#}"))},
+        "sandbox":{"attemptStatus":if sandbox.is_ok() { "RECORDED" }
+            else if account_attempt.as_ref().is_some_and(|a| !a.can_continue()) { "NOT_ATTEMPTED" }
+            else { "RESULT_UNAVAILABLE" }, "run":sandbox.as_ref().ok(), "launchError":sandbox.as_ref().err().map(|e|format!("{e:#}")),
             "observation":sandbox_observation.as_ref().ok(), "observationError":sandbox_observation.as_ref().err().map(|e|format!("{e:#}"))},
         "limitations":["only fixed ordinary DLL loading was attempted", "preloaded modules make fresh initialization inconclusive", "not Python or sandbox security validation",
-            "a difference does not identify which restriction caused it",
+            "a difference identifies only the restricted launch bundle, not a specific token restriction",
+            "dedicated runs also differ in process-creation API and token-derived default process/thread DACL",
+            "fixed ordinary-first order and shared system state are confounds",
+            "owner control also differs in account/elevation, desktop, job, offline policy and launch path",
+            "failure of both dedicated runs does not identify the account alone; common desktop/policy/profile/session remain",
             "no independent target token/job observation", "no traffic enforcement test"]
     });
     fresh_write(&path(r"trusted\minimal-load-run.json"), &serde_json::to_vec_pretty(&evidence)?)?;
-    ensure!(complete, "one or both DLL-load observations unavailable; retain per-process result");
+    ensure!(complete, "one or more DLL-load observations unavailable; retain per-process result");
     Ok(())
 }
 fn execute(owner: &str, mode: &str) -> Result<()> {
@@ -289,7 +326,7 @@ fn execute(owner: &str, mode: &str) -> Result<()> {
         prepared?;
         println!("MINIMAL_LOAD_SETUP_ONLY");
         Ok(())
-    } else { run_pair(owner, req, &inputs, &mut pins) }
+    } else { run_comparison(owner, req, &inputs, &mut pins) }
 }
 pub fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
@@ -299,7 +336,7 @@ pub fn main() -> Result<()> {
     let owner = owner()?;
     if args[0] == "disable" { return setup::disable_offline_account(&path("store"), &owner); }
     if args[0] == "setup" { return execute(&owner, "setup"); }
-    // Account shutdown encloses every run-mode input check and both process attempts.
+    // Account shutdown encloses every run-mode input check and all three process attempts.
     let run = execute(&owner, "run");
     let disable = setup::disable_offline_account(&path("store"), &owner);
     let recovery = serde_json::json!({"runError":run.as_ref().err().map(|e|format!("{e:#}")),

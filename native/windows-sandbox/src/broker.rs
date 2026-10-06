@@ -19,6 +19,12 @@ use windows_sys::Win32::{
     System::Pipes::*, System::Threading::*,
 };
 const MAX_FRAME: usize = 48 * 1024 * 1024;
+#[derive(Clone, Copy)]
+enum HelperExecution {
+    Restricted,
+    #[cfg(feature = "lab-minimal-load-comparison")]
+    FixedMinimalLoad,
+}
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct HelperPayload {
@@ -323,7 +329,45 @@ pub unsafe fn run_via_dedicated_helper(
     helper_exe: &Path,
     request: RunRequest,
 ) -> Result<RunResult> {
+    run_helper_impl(store_path, helper_exe, request, HelperExecution::Restricted,
+        #[cfg(feature = "lab-minimal-load-comparison")]
+        None,
+    )
+}
+
+/// Lab-only fixed comparison. Never called by the product `run` command.
+/// # Safety
+/// All run_via_dedicated_helper prerequisites apply. The driver must retain the
+/// reviewed, hash-bound fixture/helper/ancestor pins through both child launches.
+/// The extra ordinary-account process may execute only this fixed trusted loader.
+#[cfg(feature = "lab-minimal-load-comparison")]
+pub unsafe fn run_fixed_minimal_load_comparison(
+    store_path: &Path,
+    helper_exe: &Path,
+    request: crate::minimal_load::FixedLoadRequest,
+    record_account: &mut dyn FnMut(&crate::minimal_load::AccountControlAttempt) -> Result<()>,
+) -> Result<RunResult> {
+    ensure!(store_path == Path::new(r"C:\PiSandboxLab\store")
+        && helper_exe == Path::new(r"C:\PiSandboxLab\trusted\pi-windows-sandbox.exe"),
+        "fixed lab store/helper required");
+    run_helper_impl(store_path, helper_exe, request.into_request(),
+        HelperExecution::FixedMinimalLoad, Some(record_account))
+}
+
+unsafe fn run_helper_impl(
+    store_path: &Path,
+    helper_exe: &Path,
+    request: RunRequest,
+    execution: HelperExecution,
+    #[cfg(feature = "lab-minimal-load-comparison")]
+    mut record_account: Option<&mut dyn FnMut(&crate::minimal_load::AccountControlAttempt) -> Result<()>>,
+) -> Result<RunResult> {
     request.validate()?;
+    #[cfg(feature = "lab-minimal-load-comparison")]
+    if matches!(execution, HelperExecution::FixedMinimalLoad) {
+        crate::minimal_load::FixedLoadRequest::new(request.clone())?;
+        ensure!(record_account.is_some(), "fixed control recorder required");
+    }
     let current = Handle::from_raw(token::get_current_token_for_restriction()?)?;
     let owner = winutil::string_from_sid_bytes(&token::get_user_sid_bytes(current.raw())?)
         .map_err(anyhow::Error::msg)?;
@@ -333,8 +377,13 @@ pub unsafe fn run_via_dedicated_helper(
         .context("broker.phase=dedicated-logon")?;
     let pipe = Pipe::create(&owner, identity.sid()).context("broker.phase=pipe-create")?;
     let broker_pid = GetCurrentProcessId();
+    let command = match execution {
+        HelperExecution::Restricted => "internal-experimental-helper",
+        #[cfg(feature = "lab-minimal-load-comparison")]
+        HelperExecution::FixedMinimalLoad => "internal-fixed-minimal-load-helper",
+    };
     let args = vec![
-        "internal-experimental-helper".into(),
+        command.into(),
         pipe.name.clone(),
         broker_pid.to_string(),
     ];
@@ -373,9 +422,22 @@ pub unsafe fn run_via_dedicated_helper(
     let startup = Instant::now() + Duration::from_secs(10);
     pipe.connect(helper.pid, startup)?;
     pipe.send(&payload, startup)?;
-    let response_deadline = Instant::now()
-        + Duration::from_millis(u64::from(payload.request.timeout_ms))
-        + Duration::from_secs(15);
+    let response_budget = match execution {
+        HelperExecution::Restricted => Duration::from_millis(u64::from(payload.request.timeout_ms))
+            + Duration::from_secs(15),
+        // Two bounded runs, their cleanup, and bounded result transport. No retry.
+        #[cfg(feature = "lab-minimal-load-comparison")]
+        HelperExecution::FixedMinimalLoad => Duration::from_secs(70),
+    };
+    let response_deadline = Instant::now() + response_budget;
+    #[cfg(feature = "lab-minimal-load-comparison")]
+    if matches!(execution, HelperExecution::FixedMinimalLoad) {
+        let account: crate::minimal_load::AccountControlAttempt = pipe.receive(response_deadline)
+            .context("fixed account control unavailable; restricted result unavailable")?;
+        record_account.as_mut().context("fixed control recorder missing")?(&account)?;
+        ensure!(account.can_continue(),
+            "fixed account control incomplete; restricted child NOT_ATTEMPTED");
+    }
     // This feature omits only observational telemetry on both sides of the pipe.
     // Admission, identity, token, desktop, network and cleanup enforcement remain unchanged.
     #[cfg(not(feature = "lab-minimal-load-comparison"))]
@@ -416,6 +478,13 @@ pub unsafe fn run_via_dedicated_helper(
 }
 /// Entry used only by our dedicated-account helper binary mode. Reads no secrets.
 pub fn helper_main(name: &str, expected_broker: u32) -> Result<()> {
+    helper_main_impl(name, expected_broker, HelperExecution::Restricted)
+}
+#[cfg(feature = "lab-minimal-load-comparison")]
+pub fn fixed_minimal_load_helper_main(name: &str, expected_broker: u32) -> Result<()> {
+    helper_main_impl(name, expected_broker, HelperExecution::FixedMinimalLoad)
+}
+fn helper_main_impl(name: &str, expected_broker: u32, execution: HelperExecution) -> Result<()> {
     ensure!(expected_broker > 0, "missing broker identity");
     let pipe = Pipe::open(name, expected_broker)?;
     let payload: HelperPayload = pipe.receive(Instant::now() + Duration::from_secs(10))?;
@@ -423,6 +492,12 @@ pub fn helper_main(name: &str, expected_broker: u32) -> Result<()> {
     // Pipe::open has authenticated the transport server PID. Only that trusted
     // broker installs and sends this handle; request.parent_pid is not used for it.
     let request = payload.request;
+    #[cfg(feature = "lab-minimal-load-comparison")]
+    let fixed_request = match execution {
+        HelperExecution::FixedMinimalLoad => Some(crate::minimal_load::FixedLoadRequest::new(request.clone())?),
+        HelperExecution::Restricted => None,
+    };
+    let _ = execution;
     unsafe {
         let parent = duplicate_received_parent_wait_handle(payload.parent_wait_handle)?;
         let base = Handle::from_raw(token::get_current_token_for_restriction()?)?;
@@ -446,6 +521,17 @@ pub fn helper_main(name: &str, expected_broker: u32) -> Result<()> {
             GetErrorMode() & SEM_FAILCRITICALERRORS != 0,
             "helper critical-error mode was not set"
         );
+        #[cfg(feature = "lab-minimal-load-comparison")]
+        if let Some(fixed_request) = &fixed_request {
+            // The unchanged restricted derivative is already prepared. Its base
+            // helper identity is not modified. Runs are sequential on one desktop.
+            let account = crate::minimal_load::AccountControlAttempt::from_result(
+                crate::process::run_fixed_account_control(
+                    fixed_request, &payload.private_desktop, &parent));
+            pipe.send(&account, Instant::now() + Duration::from_secs(10))?;
+            ensure!(account.can_continue(),
+                "fixed account control incomplete; restricted child NOT_ATTEMPTED");
+        }
         #[cfg(not(feature = "lab-minimal-load-comparison"))]
         {
             let startup_diagnostics = crate::startup_diagnostics::inspect(

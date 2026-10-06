@@ -7,6 +7,8 @@
 compile_error!("minimal load comparison cannot be combined with advanced diagnostic features");
 pub mod policy_masks;
 pub mod protocol;
+#[cfg(feature = "lab-minimal-load-comparison")]
+pub mod minimal_load;
 pub const NATIVE_VALIDATED: bool = false;
 #[cfg(windows)]
 pub mod acl;

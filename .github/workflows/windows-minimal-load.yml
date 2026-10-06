@@ -13,7 +13,7 @@ on:
         required: true
         type: string
       approved_security_changes:
-        description: 'Prior external approval: fresh win22 VM, PiSandboxOffline, scoped C:\PiSandboxLab ACL/store, product firewall/WFP, fixed comparison, disable/dispose'
+        description: 'Prior external approval: fresh win22 VM, PiSandboxOffline, scoped C:\PiSandboxLab ACL/store, product firewall/WFP, fixed owner/account/restricted comparison, disable/dispose'
         required: true
         default: false
         type: boolean
@@ -107,7 +107,10 @@ jobs:
             'native/windows-sandbox/examples/minimal_load_comparison.rs',
             'native/windows-sandbox/examples/minimal_load_comparison/windows.rs',
             'native/windows-sandbox/examples/minimal_load_comparison/output.rs',
-            'native/windows-sandbox/src/broker.rs', 'native/windows-sandbox/src/lib.rs')) {
+            'native/windows-sandbox/src/broker.rs', 'native/windows-sandbox/src/lib.rs',
+            'native/windows-sandbox/src/main.rs', 'native/windows-sandbox/src/process.rs',
+            'native/windows-sandbox/src/minimal_load.rs',
+            'native/windows-sandbox/tests/minimal_load_request_contract.rs')) {
             if (-not $seen.Contains($required)) { throw "Source manifest omits required source: $required" }
           }
           if (-not ((Get-Content -LiteralPath native/windows-sandbox/src/lib.rs) -ccontains 'pub const NATIVE_VALIDATED: bool = false;')) { throw 'Production native gate changed.' }
@@ -124,6 +127,8 @@ jobs:
           # tool installers, advanced lab features, or global settings changes.
           rustup run stable rustc --version --verbose 2>&1 | Tee-Object -FilePath minimal-load-evidence/toolchain.log
           if ($LASTEXITCODE -ne 0) { throw 'Installed official Rust toolchain unavailable.' }
+          rustup run stable cargo check --locked --no-default-features --target x86_64-pc-windows-msvc --manifest-path native/windows-sandbox/Cargo.toml --bin pi-windows-sandbox --example minimal_load_comparison 2>&1 | Tee-Object -FilePath minimal-load-evidence/default-check.log
+          if ($LASTEXITCODE -ne 0) { throw 'Default-feature compilation failed; no launch.' }
           rustup run stable cargo build --locked --no-default-features --features lab-minimal-load-comparison --target x86_64-pc-windows-msvc --manifest-path native/windows-sandbox/Cargo.toml --bin pi-windows-sandbox --example minimal_load_comparison 2>&1 | Tee-Object -FilePath minimal-load-evidence/build.log
           if ($LASTEXITCODE -ne 0) { throw 'Native build/link failed; no launch.' }
           ./scripts/build_windows_minimal_load.ps1 2>&1 | Tee-Object -FilePath minimal-load-evidence/minimal-load-build.log
@@ -137,9 +142,9 @@ jobs:
             minimalLoadSha256=(Get-FileHash -LiteralPath "$build/minimal_load.exe" -Algorithm SHA256).Hash;
             provenance='Pinned-source build with installed official Rust/MSVC tools; hashes do not independently establish compiler provenance.'
           } | ConvertTo-Json | Set-Content -LiteralPath minimal-load-evidence/build-identity.json -Encoding UTF8
-      - name: Verify pure result parser before any lab setup
+      - name: Verify pure request/result and launch-source contracts before any lab setup
         run: |
-          rustup run stable cargo test --locked --no-default-features --features lab-minimal-load-comparison --target x86_64-pc-windows-msvc --manifest-path native/windows-sandbox/Cargo.toml --test minimal_load_output_contract 2>&1 | Tee-Object -FilePath minimal-load-evidence/output-contract-tests.log
+          rustup run stable cargo test --locked --no-default-features --features lab-minimal-load-comparison --target x86_64-pc-windows-msvc --manifest-path native/windows-sandbox/Cargo.toml --test minimal_load_output_contract --test minimal_load_request_contract --test broker_wait_contract --test startup_diagnostics_contract 2>&1 | Tee-Object -FilePath minimal-load-evidence/output-contract-tests.log
           if ($LASTEXITCODE -ne 0) { throw 'Pure result parsing tests failed; no staging or setup.' }
       - name: Stage exactly three fixed executables in the protected fresh lab
         id: stage
@@ -154,7 +159,7 @@ jobs:
         id: setup
         run: |
           ./scripts/stage_windows_minimal_load.ps1 -Phase Setup -ApprovedDisposableVm 2>&1 | Tee-Object -FilePath minimal-load-evidence/setup.log
-      - name: Run the fixed minimal-load comparison exactly once
+      - name: Run fixed owner/account/restricted minimal-load comparison exactly once
         id: run
         run: |
           ./scripts/stage_windows_minimal_load.ps1 -Phase Run -ApprovedDisposableVm 2>&1 | Tee-Object -FilePath minimal-load-evidence/run.log
@@ -171,7 +176,7 @@ jobs:
           FINAL_DISABLE_OUTCOME: ${{ steps.disable.outcome }}
         run: |
           . ./scripts/windows_lab_stage_sources.ps1
-          foreach ($name in @('minimal-load-stage.json', 'minimal-load-baseline.json', 'minimal-load-control.json', 'minimal-load-run.json', 'minimal-load-recovery.json', 'minimal-load-summary.json')) {
+          foreach ($name in @('minimal-load-stage.json', 'minimal-load-baseline.json', 'minimal-load-control.json', 'minimal-load-account-control.json', 'minimal-load-run.json', 'minimal-load-recovery.json', 'minimal-load-summary.json')) {
             $source = Join-Path 'C:\PiSandboxLab\trusted' $name
             if (Test-Path -LiteralPath $source -PathType Leaf) {
               Assert-LabSourceAncestors -Path $source -Role 'comparison-evidence'
@@ -193,6 +198,7 @@ jobs:
             minimal-load-evidence/source-identity.json
             minimal-load-evidence/source-manifest-verification.json
             minimal-load-evidence/toolchain.log
+            minimal-load-evidence/default-check.log
             minimal-load-evidence/build.log
             minimal-load-evidence/minimal-load-build.log
             minimal-load-evidence/build-identity.json
@@ -204,6 +210,7 @@ jobs:
             minimal-load-evidence/minimal-load-stage.json
             minimal-load-evidence/minimal-load-baseline.json
             minimal-load-evidence/minimal-load-control.json
+            minimal-load-evidence/minimal-load-account-control.json
             minimal-load-evidence/minimal-load-run.json
             minimal-load-evidence/minimal-load-recovery.json
             minimal-load-evidence/minimal-load-summary.json

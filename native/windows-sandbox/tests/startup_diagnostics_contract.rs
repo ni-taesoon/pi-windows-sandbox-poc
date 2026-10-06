@@ -56,6 +56,11 @@ fn diagnostics_are_reported_before_workload_and_share_original_deadline() {
         helper.find("&startup_diagnostics,").unwrap()
             < helper.find("process::run_restricted_with_parent").unwrap()
     );
-    assert_eq!(BROKER.matches(".receive(response_deadline)").count(), 3); // third frame is diagnostic-feature-only
+    // The existing telemetry/result suffix still has its original three receives.
+    // The distinct feature-only fixed comparison adds one account-control frame.
+    let original = BROKER.split("// This feature omits only observational telemetry").nth(1).unwrap();
+    assert_eq!(original.matches(".receive(response_deadline)").count(), 3);
+    assert_eq!(BROKER.matches(".receive(response_deadline)").count(), 4);
+    assert!(BROKER.contains("HelperExecution::Restricted => Duration::from_millis(u64::from(payload.request.timeout_ms))"));
     assert!(BROKER.contains("helper_startup_access={}"));
 }
