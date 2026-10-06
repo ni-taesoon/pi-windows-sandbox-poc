@@ -76,7 +76,7 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $actual -cne $env:SOURCE_SHA) { throw 'Source identity mismatch.' }
           New-Item -ItemType Directory -Path python-isolation-evidence | Out-Null
           [ordered]@{
-            sourceCommit=$actual; baselineCommit='0dbeb9a533a4e26d3558f760b8e5e9f4f3027855';
+            sourceCommit=$actual; baselineCommit='bd5e91228649cebd8bd8471db65c0ba8fbb871ba';
             scope='LAB_PYTHON_ISOLATION_ACCEPTANCE'; nativeValidated=$false
           } | ConvertTo-Json | Set-Content -LiteralPath python-isolation-evidence/source-identity.json -Encoding UTF8
       - name: Verify frozen source manifest and closed production gate
@@ -112,6 +112,8 @@ jobs:
             'native/windows-sandbox/src/python_isolation.rs',
             'native/windows-sandbox/src/python_isolation/broker.rs',
             'native/windows-sandbox/src/python_isolation/observer.rs',
+            'native/windows-sandbox/src/admission.rs', 'native/windows-sandbox/src/admission_plan.rs',
+            'native/windows-sandbox/tests/admission_policy_contract.rs',
             'native/windows-sandbox/src/broker.rs', 'native/windows-sandbox/src/lib.rs',
             'native/windows-sandbox/src/main.rs', 'native/windows-sandbox/src/process.rs',
             'native/windows-sandbox/tests/python_isolation_contract.rs')) {
@@ -173,7 +175,7 @@ jobs:
           } | ConvertTo-Json | Set-Content -LiteralPath python-isolation-evidence/build-identity.json -Encoding UTF8
       - name: Verify pure native contracts before any lab security setup
         run: |
-          rustup run stable cargo test --locked --no-default-features --features lab-python-isolation-acceptance --target x86_64-pc-windows-msvc --manifest-path native/windows-sandbox/Cargo.toml --test python_isolation_contract --test broker_wait_contract --test startup_diagnostics_contract 2>&1 | Tee-Object -FilePath python-isolation-evidence/native-contract-tests.log
+          rustup run stable cargo test --locked --no-default-features --features lab-python-isolation-acceptance --target x86_64-pc-windows-msvc --manifest-path native/windows-sandbox/Cargo.toml --test python_isolation_contract --test admission_policy_contract --test broker_wait_contract --test startup_diagnostics_contract 2>&1 | Tee-Object -FilePath python-isolation-evidence/native-contract-tests.log
           if ($LASTEXITCODE -ne 0) { throw 'Pure native contracts failed; no staging or setup.' }
       - name: Stage fixed protected lab and approved synthetic outside-world leaf
         id: stage
@@ -208,6 +210,63 @@ jobs:
             $text = [string]$Value
             if ($Allowed -ccontains $text) { return $text }
             return 'UNKNOWN'
+          }
+          function Diagnostic([string]$Stage, [string]$Status, [string]$Reason, $Record=$null) {
+            $category = 'NONE'; $code = $null
+            if ($null -ne $Record) {
+              try { $code = [int]$Record.Exception.HResult } catch { $code = $null }
+              try { $category = Safe-Enum $Record.CategoryInfo.Category @('NotSpecified', 'OpenError', 'CloseError', 'DeviceError', 'InvalidArgument', 'InvalidData', 'InvalidOperation', 'InvalidResult', 'InvalidType', 'MetadataError', 'NotImplemented', 'NotInstalled', 'ObjectNotFound', 'OperationStopped', 'OperationTimeout', 'SyntaxError', 'ParserError', 'PermissionDenied', 'ResourceBusy', 'ResourceExists', 'ResourceUnavailable', 'ReadError', 'WriteError', 'SecurityError', 'ProtocolError', 'ConnectionError', 'AuthenticationError', 'LimitsExceeded', 'QuotaExceeded', 'NotEnabled') } catch { $category = 'UNKNOWN' }
+            }
+            return [ordered]@{ stage=$Stage; status=$Status; reason=$Reason; hresult=$code; errorCategory=$category }
+          }
+          function Property-Value($Object, [string]$Name) {
+            if ($null -eq $Object) { throw 'DEPENDENCY_UNAVAILABLE' }
+            $property = $Object.PSObject.Properties[$Name]
+            if ($null -eq $property -or $null -eq $property.Value) { throw 'PROPERTY_UNAVAILABLE' }
+            return $property.Value
+          }
+          function Query-One([string]$Stage, [scriptblock]$Read) {
+            try {
+              $items = @(& $Read)
+              if ($items.Count -eq 0) { return @{ item=$null; diagnostic=(Diagnostic $Stage 'INCONCLUSIVE' 'MISSING_OBJECT') } }
+              if ($items.Count -ne 1) { return @{ item=$null; diagnostic=(Diagnostic $Stage 'INCONCLUSIVE' 'DUPLICATE_OBJECT') } }
+              return @{ item=$items[0]; diagnostic=(Diagnostic $Stage 'OBSERVED' 'NONE') }
+            } catch { return @{ item=$null; diagnostic=(Diagnostic $Stage 'INCONCLUSIVE' 'QUERY_ERROR' $_) } }
+          }
+          function Read-Fact([string]$Stage, [scriptblock]$Read) {
+            try {
+              $values = @(& $Read)
+              if ($values.Count -lt 1 -or $values.Count -gt 8) { throw 'FIELD_CARDINALITY' }
+              # Only helper-normalized enums and actual Boolean values may escape.
+              foreach ($value in $values) {
+                if ($value -isnot [bool] -and ($value -isnot [string] -or $factEnums -cnotcontains $value)) { throw 'UNSAFE_FIELD_TYPE' }
+              }
+              if ($values -ccontains 'UNKNOWN' -or $values -ccontains 'Unknown' -or $values -ccontains 'OTHER_OR_UNKNOWN') {
+                $fact = Diagnostic $Stage 'INCONCLUSIVE' 'UNRECOGNIZED_VALUE'
+              } else { $fact = Diagnostic $Stage 'OBSERVED' 'NONE' }
+              $fact.value = if ($values.Count -eq 1) { $values[0] } else { $values }
+              return $fact
+            } catch {
+              $fact = Diagnostic $Stage 'INCONCLUSIVE' 'FIELD_ERROR' $_
+              $fact.value=$null
+              return $fact
+            }
+          }
+          function Protocol-Value($Value) {
+            switch -CaseSensitive ([string]$Value) {
+              '256' { return 'Any' }; '6' { return 'TCP' }; '17' { return 'UDP' }
+              default { return (Safe-Enum $Value @('Any', 'TCP', 'UDP')) }
+            }
+          }
+          function Profile-Value($Value) {
+            $parts = @(([string]$Value).Split(',') | ForEach-Object { $_.Trim() } | Sort-Object -Unique)
+            if ($parts.Count -eq 1 -and $parts[0] -ceq 'Any') { return 'ANY' }
+            if (($parts -join ',') -ceq 'Domain,Private,Public') { return 'ALL_THREE' }
+            return 'OTHER_OR_UNKNOWN'
+          }
+          function Expected-Match($Fact, $Expected) {
+            if ($Fact.status -cne 'OBSERVED') { return $null }
+            return $Fact.value -ceq $Expected
           }
           function Is-Any($Value) {
             $values = @($Value)
@@ -267,6 +326,7 @@ jobs:
           )
           $entries = [Collections.Generic.List[object]]::new()
           $accountSid = $null
+          $baselineDiagnostic = Diagnostic 'BASELINE_IDENTITY' 'INCONCLUSIVE' 'UNAVAILABLE'
           try {
             . ./scripts/windows_lab_stage_sources.ps1
             $baselinePath = 'C:\PiSandboxLab\trusted\python-isolation-baseline.json'
@@ -275,57 +335,80 @@ jobs:
             $candidate = (Get-Content -LiteralPath $baselinePath -Raw | ConvertFrom-Json).accountSid
             if ($candidate -cnotmatch '\AS-1-5-21-[0-9]+-[0-9]+-[0-9]+-[0-9]+\z' -or $candidate.Length -gt 184) { throw 'BASELINE_IDENTITY' }
             $accountSid = ([Security.Principal.SecurityIdentifier]::new($candidate)).Value
-          } catch { $accountSid = $null }
+            $baselineDiagnostic = Diagnostic 'BASELINE_IDENTITY' 'OBSERVED' 'NONE'
+          } catch { $accountSid = $null; $baselineDiagnostic = Diagnostic 'BASELINE_IDENTITY' 'INCONCLUSIVE' 'BASELINE_ERROR' $_ }
+          $enforcementEnums = @('Full', 'NotApplicable', 'FirewallOffInProfile', 'CategoryOff', 'DisabledObject', 'InactiveProfile', 'LocalAddressResolutionEmpty', 'RemoteAddressResolutionEmpty', 'LocalPortResolutionEmpty', 'RemotePortResolutionEmpty', 'InterfaceResolutionEmpty', 'ApplicationResolutionEmpty', 'RemoteMachineEmpty', 'RemoteUserEmpty', 'LocalGlobalOpenPortsDisallowed', 'LocalAuthorizedApplicationsDisallowed', 'LocalFirewallRulesDisallowed', 'LocalConsecRulesDisallowed', 'NotTargetPlatform', 'OptimizedOut', 'LocalUserEmpty', 'TransportMachinesEmpty', 'TunnelMachinesEmpty')
+          $factEnums = $enforcementEnums + @('UNKNOWN', 'OK', 'Degraded', 'Error', 'Unknown', 'Block', 'Allow', 'NotConfigured', 'Inbound', 'Outbound', 'True', 'False', 'Any', 'TCP', 'UDP', 'ANY', 'ALL_THREE', 'OTHER_OR_UNKNOWN')
           foreach ($spec in $specifications) {
-            $entry = [ordered]@{ name=$spec.name; observation='INCONCLUSIVE'; reason='QUERY_OR_PROPERTY_UNAVAILABLE' }
-            try {
-              $rules = @(Get-NetFirewallRule -PolicyStore ActiveStore -Name $spec.name -ErrorAction Stop)
-              if ($rules.Count -eq 0) { $entry.reason='MISSING_RULE' }
-              elseif ($rules.Count -ne 1) { $entry.reason='DUPLICATE_RULE' }
-              elseif ($rules[0].Name -cne $spec.name) { $entry.reason='NAME_MISMATCH' }
-              else {
-                $rule = $rules[0]
-                $address = @(Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop)
-                $port = @(Get-NetFirewallPortFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop)
-                $security = @(Get-NetFirewallSecurityFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop)
-                if ($address.Count -ne 1 -or $port.Count -ne 1 -or $security.Count -ne 1) { throw 'FILTER_CARDINALITY' }
-                $enforcement = @($rule.EnforcementStatus | ForEach-Object { Safe-Enum $_ @('Full', 'NotApplicable', 'FirewallOffInProfile', 'CategoryOff', 'DisabledObject', 'InactiveProfile', 'LocalAddressResolutionEmpty', 'RemoteAddressResolutionEmpty', 'LocalPortResolutionEmpty', 'RemotePortResolutionEmpty', 'InterfaceResolutionEmpty', 'ApplicationResolutionEmpty', 'RemoteMachineEmpty', 'RemoteUserEmpty', 'LocalGlobalOpenPortsDisallowed', 'LocalAuthorizedApplicationsDisallowed', 'LocalFirewallRulesDisallowed', 'LocalConsecRulesDisallowed', 'NotTargetPlatform', 'OptimizedOut', 'LocalUserEmpty', 'TransportMachinesEmpty', 'TunnelMachinesEmpty') })
-                if ($enforcement.Count -lt 1 -or $enforcement.Count -gt 8) { $enforcement=@('UNKNOWN') }
-                $action = Safe-Enum $rule.Action @('Block', 'Allow', 'NotConfigured')
-                $direction = Safe-Enum $rule.Direction @('Inbound', 'Outbound')
-                $enabled = Safe-Enum $rule.Enabled @('True', 'False')
-                $protocol = Safe-Enum $port[0].Protocol @('Any', 'TCP', 'UDP')
-                $profileParts = @(([string]$rule.Profile).Split(',') | ForEach-Object { $_.Trim() } | Sort-Object -Unique)
-                $profile = if ($profileParts.Count -eq 1 -and $profileParts[0] -ceq 'Any') { 'ANY' }
-                  elseif (($profileParts -join ',') -ceq 'Domain,Private,Public') { 'ALL_THREE' } else { 'OTHER_OR_UNKNOWN' }
-                $matches = [ordered]@{
-                  action=($action -ceq 'Block'); direction=($direction -ceq $spec.direction); enabled=($enabled -ceq 'True');
-                  profile=($profile -in @('ANY', 'ALL_THREE')); protocol=($protocol -ceq $spec.protocol);
-                  localAddressAny=(Is-Any $address[0].LocalAddress);
-                  remoteAddressScope=((Address-Set $address[0].RemoteAddress) -ceq (Address-Set $spec.addresses));
-                  localPortAny=(Is-Any $port[0].LocalPort); remotePortAny=(Is-Any $port[0].RemotePort);
-                  localUserScope=(User-Scope-Matches $security[0].LocalUser $accountSid);
-                  remoteUserAny=(Is-Any $security[0].RemoteUser); remoteMachineAny=(Is-Any $security[0].RemoteMachine)
-                }
-                $entry = [ordered]@{
-                  name=$spec.name; observation='OBSERVED'; reason='NONE';
-                  enforcementStatus=$enforcement; primaryStatus=(Safe-Enum $rule.PrimaryStatus @('OK', 'Degraded', 'Error', 'Unknown'));
-                  action=$action; direction=$direction; enabled=$enabled; profile=$profile; protocol=$protocol;
-                  baselineIdentityAvailable=([bool]$accountSid); expectedMatches=$matches;
-                  allExpectedMatches=(@($matches.Values | Where-Object { $_ -ne $true }).Count -eq 0)
-                }
-                if (-not $accountSid) { $entry.observation='INCONCLUSIVE'; $entry.reason='BASELINE_IDENTITY_UNAVAILABLE' }
-              }
-            } catch { $entry = [ordered]@{ name=$spec.name; observation='INCONCLUSIVE'; reason='QUERY_OR_PROPERTY_UNAVAILABLE' } }
-            $entries.Add([pscustomobject]$entry)
+            # Each query and each field is isolated. A failed SDDL/address parse
+            # never removes successfully observed rule status or other filters.
+            $ruleQuery = Query-One 'RULE_QUERY' {
+              Get-NetFirewallRule -PolicyStore ActiveStore -Name $spec.name -ErrorAction Stop
+            }
+            $rule = $ruleQuery.item
+            if ($null -ne $rule) {
+              try {
+                if ((Property-Value $rule 'Name') -cne $spec.name) { throw 'NAME_MISMATCH' }
+              } catch { $rule=$null; $ruleQuery.diagnostic=(Diagnostic 'RULE_NAME' 'INCONCLUSIVE' 'NAME_UNAVAILABLE_OR_MISMATCH' $_) }
+            }
+            $addressQuery = Query-One 'ADDRESS_QUERY' {
+              if ($null -eq $rule) { throw 'RULE_UNAVAILABLE' }
+              Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
+            }
+            $portQuery = Query-One 'PORT_QUERY' {
+              if ($null -eq $rule) { throw 'RULE_UNAVAILABLE' }
+              Get-NetFirewallPortFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
+            }
+            $securityQuery = Query-One 'SECURITY_QUERY' {
+              if ($null -eq $rule) { throw 'RULE_UNAVAILABLE' }
+              Get-NetFirewallSecurityFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop
+            }
+            $address=$addressQuery.item; $port=$portQuery.item; $security=$securityQuery.item
+            $fields = [ordered]@{
+              enforcementStatus=(Read-Fact 'ENFORCEMENT_STATUS' { Property-Value $rule 'EnforcementStatus' | ForEach-Object { Safe-Enum $_ $enforcementEnums } });
+              primaryStatus=(Read-Fact 'PRIMARY_STATUS' { Safe-Enum (Property-Value $rule 'PrimaryStatus') @('OK', 'Degraded', 'Error', 'Unknown') });
+              action=(Read-Fact 'ACTION' { Safe-Enum (Property-Value $rule 'Action') @('Block', 'Allow', 'NotConfigured') });
+              direction=(Read-Fact 'DIRECTION' { Safe-Enum (Property-Value $rule 'Direction') @('Inbound', 'Outbound') });
+              enabled=(Read-Fact 'ENABLED' { Safe-Enum (Property-Value $rule 'Enabled') @('True', 'False') });
+              profile=(Read-Fact 'PROFILE' { Profile-Value (Property-Value $rule 'Profile') });
+              protocol=(Read-Fact 'PROTOCOL' { Protocol-Value (Property-Value $port 'Protocol') });
+              localAddressAny=(Read-Fact 'LOCAL_ADDRESS' { Is-Any (Property-Value $address 'LocalAddress') });
+              remoteAddressScope=(Read-Fact 'REMOTE_ADDRESS' { (Address-Set (Property-Value $address 'RemoteAddress')) -ceq (Address-Set $spec.addresses) });
+              localPortAny=(Read-Fact 'LOCAL_PORT' { Is-Any (Property-Value $port 'LocalPort') });
+              remotePortAny=(Read-Fact 'REMOTE_PORT' { Is-Any (Property-Value $port 'RemotePort') });
+              localUserScope=(Read-Fact 'LOCAL_USER_SCOPE' {
+                if (-not $accountSid) { throw 'BASELINE_UNAVAILABLE' }
+                User-Scope-Matches (Property-Value $security 'LocalUser') $accountSid
+              });
+              remoteUserAny=(Read-Fact 'REMOTE_USER_SCOPE' { Is-Any (Property-Value $security 'RemoteUser') });
+              remoteMachineAny=(Read-Fact 'REMOTE_MACHINE_SCOPE' { Is-Any (Property-Value $security 'RemoteMachine') })
+            }
+            $matches = [ordered]@{
+              action=(Expected-Match $fields.action 'Block'); direction=(Expected-Match $fields.direction $spec.direction);
+              enabled=(Expected-Match $fields.enabled 'True');
+              profile=$(if ($fields.profile.status -ceq 'OBSERVED') { $fields.profile.value -in @('ANY', 'ALL_THREE') } else { $null });
+              protocol=(Expected-Match $fields.protocol $spec.protocol)
+            }
+            foreach ($key in @('localAddressAny', 'remoteAddressScope', 'localPortAny', 'remotePortAny', 'localUserScope', 'remoteUserAny', 'remoteMachineAny')) {
+              $matches[$key] = Expected-Match $fields[$key] $true
+            }
+            $queryDiagnostics = [ordered]@{ rule=$ruleQuery.diagnostic; address=$addressQuery.diagnostic; port=$portQuery.diagnostic; security=$securityQuery.diagnostic }
+            $complete = @($fields.Values | Where-Object { $_.status -cne 'OBSERVED' }).Count -eq 0 -and
+              @($queryDiagnostics.Values | Where-Object { $_.status -cne 'OBSERVED' }).Count -eq 0
+            $entries.Add([pscustomobject][ordered]@{
+              name=$spec.name; observation=$(if ($complete) { 'OBSERVED' } else { 'INCONCLUSIVE' });
+              queries=$queryDiagnostics; fields=$fields; baselineIdentityAvailable=([bool]$accountSid);
+              expectedMatches=$matches; expectedMatchesComplete=(@($matches.Values | Where-Object { $null -eq $_ }).Count -eq 0);
+              allExpectedMatches=(@($matches.Values | Where-Object { $_ -ne $true }).Count -eq 0)
+            })
           }
           try {
             [ordered]@{
-              schemaVersion=1; sourceCommit=$env:GITHUB_SHA; policyStore='ActiveStore'; optional=$true;
+              schemaVersion=2; sourceCommit=$env:GITHUB_SHA; policyStore='ActiveStore'; optional=$true;
               observationOnly=$true; provesConnectionBlocking=$false; liveConnectionObservationsAuthoritative=$true;
               status=$(if (@($entries | Where-Object { $_.observation -cne 'OBSERVED' }).Count -eq 0) { 'OBSERVED' } else { 'INCONCLUSIVE' });
-              entries=$entries.ToArray()
-            } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath python-isolation-evidence/python-isolation-firewall-active-store.json -Encoding UTF8
+              baseline=$baselineDiagnostic; entries=$entries.ToArray()
+            } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath python-isolation-evidence/python-isolation-firewall-active-store.json -Encoding UTF8
           } catch { Write-Output 'Optional ActiveStore metadata unavailable; fixed runtime observations remain required.' }
           exit 0
       - name: Run fixed ordinary control and separate strict and pinned canaries once

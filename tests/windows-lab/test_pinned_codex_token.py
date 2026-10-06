@@ -17,16 +17,16 @@ class PinnedTokenContracts(unittest.TestCase):
         cls.workflow = (ROOT / '.github/workflows/windows-pinned-codex-token.yml').read_text()
 
     def test_sensitive_enforcement_and_reviewed_feature_scaffolding_hashes(self):
-        # Token/ACL/admission/network policy bytes stay unchanged. process/lib
-        # hashes cover the separately reviewed default-off Python observer hooks;
-        # original runner preparation/cleanup hashes remain checked by test_minimal_load.
+        # Token/ACL primitive/network bytes stay unchanged. Admission includes the
+        # separately reviewed deny-order/postcondition repair; lib exports its pure
+        # planner. Original runner regions remain checked by test_minimal_load.
         expected = {
             'native/windows-minimal-load/minimal_load.c': '2ba8c57e0945175fe02fc5e0c16f33a85a6e0cbe6eb73b61017dc467dd6b3694',
             'native/windows-sandbox/src/token.rs': '5cf5ec4c5b1d230130dd7809a0b2b6b1b12a44d9d6b46f975ae40e6dc29bf25f',
             'native/windows-sandbox/src/process.rs': '4a81a23365a58d3a8d2a86ea0ea5e013d18e260a26cb1338581cb598334fd235',
             'native/windows-sandbox/src/protocol.rs': 'dd3416dbca519b3aeb71ec48934cac8ea02fc5aa23dc859e95b4d343c02795a3',
-            'native/windows-sandbox/src/lib.rs': '873f9be09de3fa04b9f93470bccd6f0477977c6bcf305badd52b6912e516d4c7',
-            'native/windows-sandbox/src/admission.rs': '3f8f0a9e1e18b74bf0a12f605049e648e17fa2bda1c33872af27d5f7119e1ca3',
+            'native/windows-sandbox/src/lib.rs': '3df62f7cfc9e136a81ff1fb47a911e120e76c8e78abd5727da2f7eeeeb1abc1c',
+            'native/windows-sandbox/src/admission.rs': '96695cd13d54d4add094004d07d8b09a483ad2a229ebd0036969dd5eb2a7a3a0',
             'native/windows-sandbox/src/desktop.rs': 'c8a0922a34654a20260ba906dc90c4b12e0485a9aa84a7e12bc098f5a25c4a29',
             'native/windows-sandbox/src/acl.rs': 'f8097901f8c17cc45f3593eb6d4cbd46e967e0081fd6c89fb2bd943f4b33c402',
             'native/windows-sandbox/src/setup/accounts.rs': 'd5c80b98fa4aa53cf486157632cec736ada6e8a2971e8516f120b58ef7b08915',

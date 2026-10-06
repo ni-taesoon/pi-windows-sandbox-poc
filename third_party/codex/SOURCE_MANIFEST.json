@@ -27,7 +27,7 @@
       "destination": "native/windows-sandbox/src/admission.rs",
       "upstream": [],
       "origin": "new product integration source",
-      "adapted_sha256": "3f8f0a9e1e18b74bf0a12f605049e648e17fa2bda1c33872af27d5f7119e1ca3"
+      "adapted_sha256": "96695cd13d54d4add094004d07d8b09a483ad2a229ebd0036969dd5eb2a7a3a0"
     },
     {
       "destination": "native/windows-sandbox/src/broker.rs",
@@ -57,7 +57,7 @@
       "destination": "native/windows-sandbox/src/lib.rs",
       "upstream": [],
       "origin": "new product integration source",
-      "adapted_sha256": "873f9be09de3fa04b9f93470bccd6f0477977c6bcf305badd52b6912e516d4c7"
+      "adapted_sha256": "3df62f7cfc9e136a81ff1fb47a911e120e76c8e78abd5727da2f7eeeeb1abc1c"
     },
     {
       "destination": "native/windows-sandbox/src/main.rs",
@@ -295,7 +295,7 @@
       "destination": "native/windows-sandbox/src/python_isolation.rs",
       "upstream": [],
       "origin": "new default-off fixed Python acceptance laboratory source",
-      "adapted_sha256": "e8a07f228fafe410f3604edee739f419a068bdbb6baa3d05e8e808aab8dfebf7"
+      "adapted_sha256": "62c5dab2164e182185a99ee3356835d595f9e42eb3ad8bb56b16ec3945441c06"
     },
     {
       "destination": "native/windows-sandbox/src/python_isolation/broker.rs",
@@ -307,7 +307,13 @@
       "destination": "native/windows-sandbox/src/python_isolation/observer.rs",
       "upstream": [],
       "origin": "new default-off fixed Python acceptance laboratory source",
-      "adapted_sha256": "32055ebfeb42f0fd52ffc37ace5cde91de2fe6b1e9738b296e6b25320236fbb5"
+      "adapted_sha256": "9d751051da190320f9f1052ea4c1f34c8148ab9a1be3ca78febc596af60a1698"
+    },
+    {
+      "destination": "native/windows-sandbox/src/admission_plan.rs",
+      "upstream": [],
+      "origin": "new portable admission ordering, deny postconditions and rollback control flow",
+      "adapted_sha256": "329ed3ea9dc38d7923deca1c49204c069e4f08f1c49bdf3b460fcf8993d3e794"
     }
   ]
 }

@@ -16,7 +16,7 @@ fn frame(case: Case) -> Frame {
     if case.pinned() { restrictors.extend([f.account_sid.clone(),"S-1-1-0".into(),"S-1-5-5-1-2".into()]); }
     restrictors.sort();
     f.native.root = Some(IdentityEvidence {pid:10,image:PYTHON.into(),user_sid:f.account_sid.clone(),
-        restricting_sids:restrictors,desktop:f.private_desktop.clone(),exact_job_member:true,retained_handle_signaled:true});
+        restricting_sids:restrictors,desktop:DesktopEvidence::Observed {name:f.private_desktop.rsplit('\\').next().unwrap().into()},exact_job_member:true,retained_handle_signaled:true});
     f.native.job_empty = true; f.native.unobserved_handles_signaled = true; set_script(&mut f,&s); f
 }
 fn set_script(f: &mut Frame,s: &ScriptEvidence) { f.run.as_mut().unwrap().stdout_base64 =
@@ -150,10 +150,63 @@ fn set_script(f: &mut Frame,s: &ScriptEvidence) { f.run.as_mut().unwrap().stdout
     assert!(driver.contains("fixed_target_dacls(owner,identity.sid(),None)"));
     assert!(driver.contains("fixed_target_dacls(owner,&frame.account_sid,Some(&frame.capability_sid))"));
 }
-#[test] fn job_diagnostics_precede_unchanged_cardinality_rejection() {
+#[test] fn job_diagnostics_precede_bounded_cardinality_rejection() {
     let observer=include_str!("../src/python_isolation/observer.rs");
-    assert!(observer.find("diagnostics.snapshot(").unwrap()<observer.find("pids.assigned <= 2 && pids.count <= 2").unwrap());
+    assert!(observer.find("diagnostics.snapshot(").unwrap()<observer.find("pids.assigned <= 3 && pids.count <= 3").unwrap());
     assert!(observer.contains("PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE"));
     assert!(!observer.contains("PROCESS_ALL_ACCESS"));assert!(!observer.contains("PROCESS_VM_READ"));
     assert!(!observer.contains("descendant_error.take().or_else"));
+}
+#[test] fn unavailable_desktop_preserves_token_job_identity_without_claiming_desktop() {
+    let mut f=frame(Case::PinnedBoundary);
+    f.native.root.as_mut().unwrap().desktop=DesktopEvidence::Unavailable {error:"api=GetThreadDesktop(identity); win32=0".into()};
+    assert!(native_valid(&f));
+    let a=assess(&f,true,true,true);assert_eq!(a.identity,Verdict::ObservedPass);
+    assert_eq!(a.desktop,Verdict::Inconclusive);assert!(!a.full_pass);
+    let root=serde_json::to_value(f.native.root.as_ref().unwrap()).unwrap();
+    assert_eq!(root["desktop"]["status"],"UNAVAILABLE");assert!(root["desktop"]["name"].is_null());
+    f.native.root.as_mut().unwrap().desktop=DesktopEvidence::Observed {name:"Default".into()};
+    assert_eq!(assess(&f,true,true,true).desktop,Verdict::PolicyBoundaryFail);
+}
+#[test] fn single_owned_exact_job_system_conhost_is_separate_infrastructure() {
+    let mut f=frame(Case::PinnedBoundary);
+    let mut host=f.native.root.as_ref().unwrap().clone();host.pid=20;host.image=CONHOST.into();
+    host.restricting_sids=vec![]; // Report actual host restrictors; do not invent Python equivalence.
+    host.desktop=DesktopEvidence::Unavailable {error:"infrastructure desktop not queried".into()};
+    f.native.console_hosts.push(host.clone());assert!(native_valid(&f));assert!(f.cleanup_verified());
+    f.native.console_hosts[0].retained_handle_signaled=false;assert!(!f.cleanup_verified());assert!(!native_valid(&f));
+    f.native.console_hosts[0]=host.clone();f.native.console_hosts[0].user_sid="S-1-5-18".into();assert!(!native_valid(&f));
+    f.native.console_hosts[0]=host.clone();f.native.console_hosts[0].image=r"C:\PiSandboxLab\work\conhost.exe".into();assert!(!native_valid(&f));
+    f.native.console_hosts[0]=host.clone();f.native.console_hosts[0].exact_job_member=false;assert!(!native_valid(&f));
+    f.native.console_hosts[0]=host.clone();f.native.console_hosts.push(host);assert!(!native_valid(&f));
+}
+#[test] fn console_host_never_substitutes_for_fixed_python_descendant() {
+    let mut f=frame(Case::PinnedChildNormalExit);
+    let mut host=f.native.root.as_ref().unwrap().clone();host.pid=20;host.image=CONHOST.into();
+    f.native.console_hosts.push(host.clone());assert!(!native_valid(&f));
+    f.native.descendants.push(host);assert!(!native_valid(&f));
+    let mut child=f.native.root.as_ref().unwrap().clone();child.pid=30;
+    f.native.descendants[0]=child;assert!(native_valid(&f));
+    f.native.descendants[0].restricting_sids.clear();assert!(!native_valid(&f));
+}
+#[test] fn observer_allowance_is_exactly_classified_and_assertion_change_is_disclosed() {
+    let observer=include_str!("../src/python_isolation/observer.rs");
+    assert!(observer.contains("image.eq_ignore_ascii_case(CONHOST)"));
+    assert!(observer.contains("self.console_hosts.is_empty()"));
+    assert!(observer.contains("unexpected additional Python descendant"));
+    assert!(observer.contains("self.unclassified.push((pid,handle))"));
+    let driver=include_str!("../examples/python_isolation_acceptance/windows.rs");
+    assert!(driver.contains("boundedCoreAcceptanceDefinition"));
+    assert!(driver.contains("unavailable desktop observation is excluded"));
+    assert!(driver.contains("a.desktop == Verdict::PolicyBoundaryFail"));
+}
+#[test] fn desktop_query_clears_stale_error_and_null_never_becomes_observed() {
+    let observer=include_str!("../src/python_isolation/observer.rs");
+    let query=observer.split("unsafe fn inspect_desktop(tid: u32)").nth(1).unwrap()
+        .split("unsafe fn restricting_sids").next().unwrap();
+    assert!(query.contains("SetLastError(0);\n    let desktop=GetThreadDesktop(tid);\n    api((desktop != 0) as i32,\"GetThreadDesktop(identity)\")?;"));
+    assert!(observer.contains("Err(error) => DesktopEvidence::Unavailable {error:format!(\"{error:#}\")}"));
+    let mut f=frame(Case::PinnedBoundary);
+    f.native.root.as_mut().unwrap().desktop=DesktopEvidence::Unavailable {error:"api=GetThreadDesktop(identity); win32=0".into()};
+    assert_eq!(desktop_verdict(&f),Verdict::Inconclusive);
 }

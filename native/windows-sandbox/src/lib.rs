@@ -13,6 +13,7 @@ compile_error!("Python isolation acceptance must be built alone without DLL labo
 #[cfg(feature = "lab-python-isolation-acceptance")]
 pub mod python_isolation;
 pub mod policy_masks;
+pub mod admission_plan;
 pub mod protocol;
 #[cfg(feature = "lab-minimal-load-comparison")]
 pub mod minimal_load;

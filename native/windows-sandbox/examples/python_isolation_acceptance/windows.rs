@@ -377,7 +377,8 @@ fn run_suite(owner: &str, digest: &BTreeMap<String,String>, pins: &mut Vec<File>
         Ok(())
     }) };
     let boundary_fail = assessments.iter().any(|(_,a)| a.outside_write == Verdict::PolicyBoundaryFail
-        || a.explicit_denies == Verdict::PolicyBoundaryFail || a.loopback_only == Verdict::PolicyBoundaryFail);
+        || a.explicit_denies == Verdict::PolicyBoundaryFail || a.loopback_only == Verdict::PolicyBoundaryFail
+        || a.desktop == Verdict::PolicyBoundaryFail);
     let core = !boundary_fail && ordinary_ok && run.is_ok() && assessments.iter().filter(|(c,_)| c.pinned()).count() == 3
         && assessments.iter().filter(|(c,_)| c.pinned()).all(|(c,a)| a.python_success && a.identity == Verdict::ObservedPass
             && if c.boundary() { a.outside_write == Verdict::ObservedPass && a.broad_read_truth == Verdict::ObservedPass
@@ -386,7 +387,14 @@ fn run_suite(owner: &str, digest: &BTreeMap<String,String>, pins: &mut Vec<File>
     let summary = serde_json::json!({"schemaVersion":1,"scope":"LAB_PYTHON_ISOLATION_ACCEPTANCE","nativeValidated":false,
         "normalValidationEligible":false,"pythonValidationEligible":false,"fullPass":false,
         "status":if boundary_fail {"POLICY_BOUNDARY_FAIL"} else if core {"BOUNDED_OBSERVATIONS_RECORDED"} else {"INCONCLUSIVE"},
-        "boundedCoreAcceptance":core,"parentDeath":"NOT_TESTED","frames":frames,"inputs":digest,"policyHash":policy_hash,
+        "boundedCoreAcceptance":core,
+        "boundedCoreAcceptanceDefinition":["Python root and fixed child token/image/exact-Job identity plus retained-handle cleanup",
+            "at most one same-account exact System32 conhost in that Job; its restricting SIDs are reported separately",
+            "positive Python files, outside-write denial, explicit denies and live-control loopback denials",
+            "unavailable desktop observation is excluded from bounded core; any observed desktop-name mismatch fails",
+            "desktop UOI_NAME checks the observed leaf only; window-station attachment is not independently observed"],
+        "observerCorrection":"console-host infrastructure is classified separately from Python children; unavailable desktop no longer erases token/Job evidence",
+        "parentDeath":"NOT_TESTED","frames":frames,"inputs":digest,"policyHash":policy_hash,
         "suiteError":run.err().map(|e|format!("{e:#}")),"accountDisabled":false,
         "limitations":["parent-death cleanup is NOT_TESTED; full-isolation acceptance is impossible in this revision",
             "loopback TCP4/TCP6 only; no DNS, UDP, external endpoint or all-outbound claim",
