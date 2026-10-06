@@ -17,9 +17,9 @@ class PinnedTokenContracts(unittest.TestCase):
         cls.workflow = (ROOT / '.github/workflows/windows-pinned-codex-token.yml').read_text()
 
     def test_sensitive_enforcement_and_reviewed_feature_scaffolding_hashes(self):
-        # Token/ACL primitive/network bytes stay unchanged. Admission includes the
-        # separately reviewed deny-order/postcondition repair; lib exports its pure
-        # planner. Original runner regions remain checked by test_minimal_load.
+        # Original token constructors and ACL primitives stay unchanged. Admission
+        # retains its reviewed repair; WFP adds reviewed scope guards and gated
+        # filters. Original runner regions remain checked by test_minimal_load.
         expected = {
             'native/windows-minimal-load/minimal_load.c': '2ba8c57e0945175fe02fc5e0c16f33a85a6e0cbe6eb73b61017dc467dd6b3694',
             'native/windows-sandbox/src/token.rs': '5cf5ec4c5b1d230130dd7809a0b2b6b1b12a44d9d6b46f975ae40e6dc29bf25f',
@@ -31,16 +31,23 @@ class PinnedTokenContracts(unittest.TestCase):
             'native/windows-sandbox/src/acl.rs': 'f8097901f8c17cc45f3593eb6d4cbd46e967e0081fd6c89fb2bd943f4b33c402',
             'native/windows-sandbox/src/setup/accounts.rs': 'd5c80b98fa4aa53cf486157632cec736ada6e8a2971e8516f120b58ef7b08915',
             'native/windows-sandbox/src/setup/launch.rs': '20292cb9669a647d3bbb37ee5abfdea72ff4e45fc77f0c057d992432b4957cd6',
-            'native/windows-sandbox/src/network.rs': '487e79faa0d88cd6ff605715e7d385f004efb156c9bda8d577434ab3f09cfacd',
+            'native/windows-sandbox/src/network.rs': '27ba07a2cfd7aca2f980217e9de956eeec14573a999177ff01066415c69fd775',
             'native/windows-sandbox/src/network/firewall.rs': 'c92c6c9f49708349d17e4bc473151dadd0f82dc5cd5d7ce6812702669ec5cf8c',
-            'native/windows-sandbox/src/network/wfp.rs': 'ef0980326ed73dd693d4af2846b732f63027c091029cb48dfdd08b2311e6e2d3',
+            'native/windows-sandbox/src/network/wfp.rs': '2001efdc85c42e3e3fa3384b78f436a2d800832c9a1e533cdef59dc5a789a159',
             '.github/workflows/windows-minimal-load.yml': '86c63fcdbc72bf072712a58d0e66d56f7ff444bc15da4b86d6a5cf37433dd73a',
             'scripts/stage_windows_minimal_load.ps1': '957e6e8010f61b76a3f3ed1f4b3603a6e1b8c7f0d1d9f20386306aa60e021478',
             'scripts/build_windows_minimal_load.ps1': '6ab57429f422dfeccdd3855b2f3f616c818d9b55b5611c34636a66db429d8d1c',
         }
         for name, digest in expected.items():
             with self.subTest(name=name):
-                self.assertEqual(hashlib.sha256((ROOT / name).read_bytes()).hexdigest(), digest)
+                data = (ROOT / name).read_bytes()
+                if name.endswith('src/token.rs'):
+                    # Strip only the exact new default-off module hook; original
+                    # constructor bytes must still match their pinned old hash.
+                    hook = b'\n// The composed repair experiment is never available through the product policy.\n#[cfg(feature = "lab-python-policy-repair-comparison")]\n#[path = "python_isolation/token_candidate.rs"]\nmod python_policy_repair_candidate;\n#[cfg(feature = "lab-python-policy-repair-comparison")]\npub(crate) use python_policy_repair_candidate::create_lab_policy_repair_token_from;\n'
+                    self.assertTrue(data.endswith(hook))
+                    data = data[:-len(hook)]
+                self.assertEqual(hashlib.sha256(data).hexdigest(), digest)
 
     def test_default_off_and_advanced_features_remain_incompatible(self):
         manifest = (BASE / 'Cargo.toml').read_text()

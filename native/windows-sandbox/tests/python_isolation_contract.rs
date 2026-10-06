@@ -11,7 +11,7 @@ fn frame(case: Case) -> Frame {
         private_desktop:"Winsta0\\PiSandboxDesktop-0123456789abcdef0123456789abcdef".into(),
         run:Some(RunResult {kind:"result".into(),exit_code:0,stdout_base64:String::new(),stderr_base64:String::new(),
             stop_reason:StopReason::Exited,timed_out:false,truncated:false,terminated:true,cleanup_verified:true}),
-        launch_error:None,native:NativeEvidence::default() };
+        launch_error:None,native:NativeEvidence::default(),candidate_token:None };
     let mut restrictors = vec![f.capability_sid.clone()];
     if case.pinned() { restrictors.extend([f.account_sid.clone(),"S-1-1-0".into(),"S-1-5-5-1-2".into()]); }
     restrictors.sort();
@@ -198,7 +198,7 @@ fn set_script(f: &mut Frame,s: &ScriptEvidence) { f.run.as_mut().unwrap().stdout
     let driver=include_str!("../examples/python_isolation_acceptance/windows.rs");
     assert!(driver.contains("boundedCoreAcceptanceDefinition"));
     assert!(driver.contains("unavailable desktop observation is excluded"));
-    assert!(driver.contains("a.desktop == Verdict::PolicyBoundaryFail"));
+    assert!(driver.contains("lab::any_policy_boundary_failure(&assessments)"));
 }
 #[test] fn desktop_query_clears_stale_error_and_null_never_becomes_observed() {
     let observer=include_str!("../src/python_isolation/observer.rs");
@@ -209,4 +209,73 @@ fn set_script(f: &mut Frame,s: &ScriptEvidence) { f.run.as_mut().unwrap().stdout
     let mut f=frame(Case::PinnedBoundary);
     f.native.root.as_mut().unwrap().desktop=DesktopEvidence::Unavailable {error:"api=GetThreadDesktop(identity); win32=0".into()};
     assert_eq!(desktop_verdict(&f),Verdict::Inconclusive);
+}
+fn candidate_configuration(capability: &str) -> CandidateTokenConfiguration {
+    CandidateTokenConfiguration {profile:"CAP_ONLY_UPSTREAM_DEFAULT_DACL_V1".into(),restricting_sids:vec![capability.into()],
+        default_dacl_aces:vec![DefaultDaclAce {role:DefaultDaclRole::Logon,mask:0x10000000,flags:0},
+            DefaultDaclAce {role:DefaultDaclRole::OwnerRights,mask:0x00020000,flags:0}]}
+}
+#[test] fn candidate_configuration_accepts_only_one_cap_and_exact_upstream_dacl() {
+    let cap="S-1-5-21-1-2-3-4";let mut c=candidate_configuration(cap);assert!(c.matches_capability(cap));
+    c.restricting_sids.push("S-1-1-0".into());assert!(!c.matches_capability(cap));
+    c=candidate_configuration(cap);c.default_dacl_aces[1].mask=0x10000000;assert!(!c.matches_capability(cap));
+    c=candidate_configuration(cap);c.default_dacl_aces[0].flags=3;assert!(!c.matches_capability(cap));
+    c=candidate_configuration(cap);c.default_dacl_aces[0].role=DefaultDaclRole::OwnerRights;assert!(!c.matches_capability(cap));
+}
+#[cfg(not(feature="lab-python-policy-repair-comparison"))]
+#[test] fn base_feature_has_no_candidate_cases() {
+    assert_eq!(Case::ALL.len(),7);assert!(!Case::ALL.iter().any(|case|case.candidate()));
+    assert!(serde_json::from_str::<Case>("\"candidate-boundary\"").is_err());
+    assert!(!candidate_acceptance(&[],true,true).bounded_core_acceptance);
+}
+#[cfg(feature="lab-python-policy-repair-comparison")]
+#[test] fn composed_feature_appends_three_fixed_cases_without_reordering_controls() {
+    let names=Case::ALL.map(Case::name);
+    assert_eq!(&names[..7],&["ordinary-outside","strict-boundary","strict-child-normal-exit","strict-child-timeout",
+        "pinned-boundary","pinned-child-normal-exit","pinned-child-timeout"]);
+    assert_eq!(&names[7..],&["candidate-boundary","candidate-child-normal-exit","candidate-child-timeout"]);
+    assert_eq!(compiled_feature(),"lab-python-policy-repair-comparison");
+    for case in &Case::ALL[7..] {
+        assert!(case.candidate());assert!(!case.pinned());assert_eq!(case.label(),"candidate");
+        assert!(FixedRequest::new(request(*case,123,"0".repeat(64))).is_ok());
+    }
+}
+#[cfg(feature="lab-python-policy-repair-comparison")]
+#[test] fn candidate_requires_readback_and_actual_capability_only_child_token() {
+    let mut f=frame(Case::CandidateBoundary);assert!(!native_valid(&f));
+    f.candidate_token=Some(candidate_configuration(&f.capability_sid));assert!(native_valid(&f));
+    f.native.root.as_mut().unwrap().restricting_sids.push("S-1-1-0".into());assert!(!native_valid(&f));
+    f.native.root.as_mut().unwrap().restricting_sids.pop();
+    f.candidate_token.as_mut().unwrap().default_dacl_aces[0].mask=0;assert!(!native_valid(&f));
+}
+#[cfg(feature="lab-python-policy-repair-comparison")]
+#[test] fn candidate_success_never_overwrites_a_pinned_boundary_failure() {
+    let passing=assess(&frame(Case::StrictBoundary),true,true,true);
+    let mut assessments=Vec::new();
+    let mut failed=passing.clone();failed.outside_write=Verdict::PolicyBoundaryFail;
+    assessments.push((Case::PinnedBoundary,failed));
+    for case in [Case::CandidateBoundary,Case::CandidateChildNormalExit,Case::CandidateChildTimeout] {
+        let mut a=passing.clone();if case.descendant() {a.descendant_cleanup=Verdict::ObservedPass;}
+        assessments.push((case,a));
+    }
+    assert!(candidate_acceptance(&assessments,true,true).bounded_core_acceptance);
+    assert!(any_policy_boundary_failure(&assessments));
+    assert!(!candidate_acceptance(&assessments,true,false).bounded_core_acceptance);
+    assessments.pop();assert!(!candidate_acceptance(&assessments,true,true).bounded_core_acceptance);
+}
+#[test] fn candidate_constructor_changes_only_new_strict_default_dacl_after_acknowledgements() {
+    let token=include_str!("../src/python_isolation/token_candidate.rs");
+    assert!(token.contains("create_strict_write_token_from(base,&[capability])"));
+    assert!(token.contains("get_logon_sid_bytes(base)"));
+    assert!(token.contains("set_default_dacl(derived,logon.as_mut_ptr().cast(),&[])"));
+    assert!(token.contains("CloseHandle(derived)"));
+    for forbidden in ["create_workspace_write_token", "AdjustTokenPrivileges(", "CreateRestrictedToken(",
+        "SetSecurityInfo(","SetNamedSecurityInfo", "Impersonate", "allow_null_device"] {assert!(!token.contains(forbidden));}
+    let broker=include_str!("../src/python_isolation/broker.rs");
+    assert!(broker.contains("acknowledged_controls == 7 && case == Case::CandidateBoundary"));
+    assert!(broker.find("ensure!(ack.case == case").unwrap()<broker.find("acknowledged_controls += 1").unwrap());
+    assert!(broker.contains("candidate token construction failed before launch"));
+    let manifest=include_str!("../Cargo.toml");
+    assert!(manifest.contains("lab-python-policy-repair-comparison = [\"lab-python-isolation-acceptance\"]"));
+    assert!(manifest.contains("default = []"));
 }

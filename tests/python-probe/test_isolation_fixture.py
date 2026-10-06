@@ -107,7 +107,8 @@ class IsolationFixtureTests(unittest.TestCase):
     def test_fixture_has_only_declared_modes_and_endpoints(self):
         self.assertEqual(fixture.MODES, frozenset(("ordinary-outside", "strict-boundary",
             "strict-child-normal-exit", "strict-child-timeout", "pinned-boundary",
-            "pinned-child-normal-exit", "pinned-child-timeout", "descendant-hold")))
+            "pinned-child-normal-exit", "pinned-child-timeout", "candidate-boundary",
+            "candidate-child-normal-exit", "candidate-child-timeout", "descendant-hold")))
         source = SOURCE.read_text()
         self.assertNotIn("getaddrinfo(", source)
         self.assertNotIn("gethostbyname(", source)

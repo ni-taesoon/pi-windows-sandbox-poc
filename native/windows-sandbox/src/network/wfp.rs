@@ -87,12 +87,17 @@ const SUBLAYER_KEY: GUID = GUID::from_u128(0xa112309bf79e58a7bf97348979bad2fb);
 /// may continue ordinary setup after an error, but must restore these filters
 /// before re-enabling accounts left disabled by interrupted cleanup.
 pub fn install_wfp_filters_for_sid(sid: &str) -> Result<usize> {
+    // Reject malformed compiled scope and an unowned SID before opening a
+    // write transaction. A future spec must never create a global block.
+    for spec in FILTER_SPECS {
+        validate_user_scope(spec.conditions)?;
+    }
+    let user_condition = UserMatchCondition::for_sid(sid)?;
     let engine = Engine::open(INFINITE)?;
     let mut transaction = engine.begin_transaction()?;
     ensure_provider(engine.handle)?;
     ensure_sublayer(engine.handle)?;
 
-    let user_condition = UserMatchCondition::for_sid(sid)?;
     let mut installed_filter_count = 0;
     for spec in FILTER_SPECS {
         delete_filter_if_present(engine.handle, &spec.key)?;
@@ -102,6 +107,11 @@ pub fn install_wfp_filters_for_sid(sid: &str) -> Result<usize> {
 
     transaction.commit()?;
     Ok(installed_filter_count)
+}
+
+/// Compiled policy metadata only; neither installs nor inspects OS state.
+pub(super) fn expected_filter_count() -> usize {
+    FILTER_SPECS.len()
 }
 
 pub(crate) fn remove_wfp_filters() -> Result<()> {
@@ -208,6 +218,16 @@ struct UserMatchCondition {
 
 impl UserMatchCondition {
     fn for_sid(sid: &str) -> Result<Self> {
+        // Keep direct callers subject to the same fixed-local-account check as
+        // network::install_offline_protection; never accept an alias/group SID.
+        anyhow::ensure!(
+            !sid.is_empty() && sid.starts_with("S-1-5-21-"),
+            "expected a nonempty local account SID"
+        );
+        anyhow::ensure!(
+            sid == crate::setup::local_offline_account_sid()?,
+            "refusing non-product WFP account"
+        );
         let account_sid = crate::token::LocalSid::from_string(sid)?;
         let access = EXPLICIT_ACCESS_W {
             grfAccessPermissions: FWP_ACTRL_MATCH_FILTER,
@@ -239,13 +259,18 @@ impl UserMatchCondition {
         };
         ensure_success(result, "BuildSecurityDescriptorW")?;
 
-        Ok(Self {
+        let condition = Self {
             security_descriptor,
             blob: FWP_BYTE_BLOB {
                 size: security_descriptor_len,
                 data: security_descriptor as *mut u8,
             },
-        })
+        };
+        anyhow::ensure!(
+            !condition.blob.data.is_null() && condition.blob.size > 0,
+            "empty WFP account security descriptor"
+        );
+        Ok(condition)
     }
 }
 
@@ -307,7 +332,7 @@ fn add_filter(
 ) -> Result<()> {
     let filter_name = to_wide(OsStr::new(spec.name));
     let filter_description = to_wide(OsStr::new(spec.description));
-    let mut filter_conditions = build_conditions(spec.conditions, user_condition);
+    let mut filter_conditions = build_conditions(spec.conditions, user_condition)?;
     let provider_key = PROVIDER_KEY;
     let filter = FWPM_FILTER0 {
         filterKey: spec.key,
@@ -344,8 +369,9 @@ fn add_filter(
 fn build_conditions(
     specs: &[ConditionSpec],
     user_condition: &UserMatchCondition,
-) -> Vec<FWPM_FILTER_CONDITION0> {
-    specs
+) -> Result<Vec<FWPM_FILTER_CONDITION0>> {
+    validate_user_scope(specs)?;
+    Ok(specs
         .iter()
         .map(|spec| match spec {
             ConditionSpec::User => FWPM_FILTER_CONDITION0 {
@@ -375,7 +401,21 @@ fn build_conditions(
                 },
             },
         })
-        .collect()
+        .collect())
+}
+
+/// Exactly one account condition is mandatory even for port/protocol filters.
+/// This pure guard rejects empty, account-free, or ambiguous duplicated scope.
+fn validate_user_scope(specs: &[ConditionSpec]) -> Result<()> {
+    anyhow::ensure!(
+        specs
+            .iter()
+            .filter(|condition| matches!(condition, ConditionSpec::User))
+            .count()
+            == 1,
+        "WFP filter requires exactly one owned-account user condition"
+    );
+    Ok(())
 }
 
 /// Deletes an old copy of a filter before re-adding it.
@@ -427,6 +467,7 @@ fn zero_guid() -> GUID {
 
 #[cfg(test)]
 mod tests {
+    use super::{validate_user_scope, ConditionSpec};
     use super::FILTER_SPECS;
 
     use std::collections::BTreeSet;
@@ -454,6 +495,26 @@ mod tests {
             .map(|spec| spec.name)
             .collect::<BTreeSet<_>>();
         assert_eq!(names.len(), FILTER_SPECS.len());
+    }
+
+    #[test]
+    fn every_filter_has_exactly_one_account_condition() {
+        for spec in FILTER_SPECS {
+            validate_user_scope(spec.conditions).unwrap();
+        }
+        assert!(validate_user_scope(&[]).is_err());
+        assert!(validate_user_scope(&[ConditionSpec::Protocol(6)]).is_err());
+        assert!(validate_user_scope(&[ConditionSpec::RemotePort(53)]).is_err());
+        assert!(validate_user_scope(&[ConditionSpec::User, ConditionSpec::User]).is_err());
+        assert!(validate_user_scope(&[ConditionSpec::User]).is_ok());
+    }
+
+    #[test]
+    fn compiled_filter_count_matches_lab_feature() {
+        assert_eq!(
+            FILTER_SPECS.len(),
+            if cfg!(feature = "lab-python-policy-repair-comparison") { 14 } else { 12 }
+        );
     }
 }
 
@@ -503,9 +564,10 @@ fn same_guid(a: &GUID, b: &GUID) -> bool {
 /// Exact descriptor equality is intentionally conservative (normalization may refuse).
 pub fn verify_wfp_filters_for_sid(sid: &str) -> Result<()> {
     use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::*;
-    let engine = Engine::open(1000)?;
     let user = UserMatchCondition::for_sid(sid)?;
+    let engine = Engine::open(1000)?;
     for spec in FILTER_SPECS {
+        validate_user_scope(spec.conditions)?;
         unsafe {
             let mut raw = null_mut();
             ensure_success(
@@ -530,7 +592,7 @@ pub fn verify_wfp_filters_for_sid(sid: &str) -> Result<()> {
                         && !f.filterCondition.is_null(),
                     "WFP filter scope mismatch"
                 );
-                let expected = build_conditions(spec.conditions, &user);
+                let expected = build_conditions(spec.conditions, &user)?;
                 for (actual, expected) in
                     std::slice::from_raw_parts(f.filterCondition, f.numFilterConditions as usize)
                         .iter()
