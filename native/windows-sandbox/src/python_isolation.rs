@@ -58,11 +58,59 @@ pub struct IdentityEvidence {
     pub pid: u32, pub image: String, pub user_sid: String, pub restricting_sids: Vec<String>,
     pub desktop: String, pub exact_job_member: bool, pub retained_handle_signaled: bool,
 }
+/// Bounded diagnostic metadata; never substitutes for identity or cleanup evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JobPidSnapshot {
+    pub assigned: u32, pub returned: u32, pub pids: Vec<u32>, pub query_error: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JobMemberEvidence { pub pid: u32, pub image: Option<String>, pub query_error: Option<String> }
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NativeDiagnostics {
+    pub expected_root_pid: u32, pub expected_root_thread_id: u32,
+    pub root_first_error: Option<String>, pub root_last_error: Option<String>,
+    pub descendant_first_error: Option<String>, pub job_pid_snapshots: Vec<JobPidSnapshot>,
+    pub job_members: Vec<JobMemberEvidence>, pub truncated: bool,
+}
+impl NativeDiagnostics {
+    pub const LIMIT: usize = 8;
+    fn bounded_error(value: String) -> String { value.chars().take(512).collect() }
+    pub fn root_error(&mut self, value: String) {
+        let value = Self::bounded_error(value);
+        self.root_first_error.get_or_insert_with(|| value.clone());
+        self.root_last_error = Some(value);
+    }
+    pub fn descendant_error(&mut self, value: String) {
+        self.descendant_first_error.get_or_insert_with(|| Self::bounded_error(value));
+    }
+    pub fn snapshot(&mut self, mut value: JobPidSnapshot) {
+        if value.pids.len() > Self::LIMIT { value.pids.truncate(Self::LIMIT); self.truncated = true; }
+        value.query_error = value.query_error.map(Self::bounded_error);
+        if self.job_pid_snapshots.last() == Some(&value) { return; }
+        if self.job_pid_snapshots.len() < Self::LIMIT { self.job_pid_snapshots.push(value); }
+        else { self.truncated = true; }
+    }
+    pub fn member(&mut self, mut value: JobMemberEvidence) {
+        if self.job_members.iter().any(|m| m.pid == value.pid) { return; }
+        value.query_error = value.query_error.map(Self::bounded_error);
+        if value.image.as_ref().is_some_and(|image| image.len() > 1024) {
+            value.image = None; value.query_error = Some("member image exceeded diagnostic bounds".into());
+            self.truncated = true;
+        }
+        if self.job_members.len() < Self::LIMIT { self.job_members.push(value); }
+        else { self.truncated = true; }
+    }
+}
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NativeEvidence {
     pub root: Option<IdentityEvidence>, pub descendants: Vec<IdentityEvidence>,
     pub error: Option<String>, pub job_empty: bool, pub unobserved_handles_signaled: bool,
+    #[serde(default)]
+    pub diagnostics: NativeDiagnostics,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -83,9 +131,22 @@ impl Frame {
 pub struct Recorded { pub case: Case }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "outcome", rename_all = "SCREAMING_SNAKE_CASE", deny_unknown_fields)]
-pub enum Probe { Success, PermissionDenied { winerror: u32 }, Inconclusive { winerror: Option<u32> } }
+pub enum Probe {
+    Success,
+    PermissionDenied { winerror: Option<u32>, errno: Option<i32>, #[serde(rename = "errorType")] error_type: Option<String> },
+    Inconclusive { winerror: Option<u32>, errno: Option<i32>, #[serde(rename = "errorType")] error_type: Option<String> },
+}
 impl Probe {
-    pub fn explicit_denial(&self) -> bool { matches!(self, Self::PermissionDenied { winerror: 5 | 10013 }) }
+    fn errno_permission(&self) -> bool {
+        matches!(self, Self::PermissionDenied {winerror:None,errno:Some(1 | 13),error_type:Some(kind)} if kind == "PermissionError")
+    }
+    pub fn file_denial(&self) -> bool {
+        matches!(self, Self::PermissionDenied {winerror:Some(5),..}) || self.errno_permission()
+    }
+    pub fn socket_denial(&self) -> bool {
+        matches!(self, Self::PermissionDenied {winerror:Some(10013),..}) || self.errno_permission()
+    }
+    pub fn explicit_denial(&self) -> bool { self.file_denial() || self.socket_denial() }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -156,10 +217,10 @@ pub fn assess(frame: &Frame, output_bytes_match: bool, ordinary_outside_write_su
     let boundary = script.as_ref().filter(|_| frame.case.boundary());
     let outside_write = match boundary.and_then(|s| s.outside_write.as_ref()) {
         Some(Probe::Success) => Verdict::PolicyBoundaryFail,
-        Some(p) if matches!(p, Probe::PermissionDenied {winerror:5}) && ordinary_outside_write_succeeded => Verdict::ObservedPass,
+        Some(p) if p.file_denial() && ordinary_outside_write_succeeded => Verdict::ObservedPass,
         _ => Verdict::Inconclusive };
-    let file_deny = |p: Option<&Probe>| matches!(p, Some(Probe::PermissionDenied {winerror:5}));
-    let socket_deny = |p: Option<&Probe>| matches!(p, Some(Probe::PermissionDenied {winerror:10013}));
+    let file_deny = |p: Option<&Probe>| p.is_some_and(Probe::file_denial);
+    let socket_deny = |p: Option<&Probe>| p.is_some_and(Probe::socket_denial);
     Assessment { python_success: script.is_some() && (!frame.case.boundary() || output_bytes_match),
         identity: if valid_native { Verdict::ObservedPass } else { Verdict::Inconclusive },
         outside_write, outside_read: script.as_ref().and_then(|s| s.outside_read.clone()),

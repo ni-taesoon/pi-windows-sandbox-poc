@@ -117,6 +117,78 @@ fn verify_outside_acl(file: &File) -> Result<()> {
         LocalFree(descriptor as HLOCAL); result
     }
 }
+// This telemetry is read-only and role-normalized. It never modifies admission,
+// accepts arbitrary paths, serializes SDDL, or exposes unknown trustee identities.
+#[derive(Debug)]
+struct DaclObservationError { stage: &'static str, winerror: Option<u32> }
+type DaclResult<T> = std::result::Result<T,DaclObservationError>;
+fn dacl_bad(stage: &'static str) -> DaclObservationError { DaclObservationError { stage,winerror:None } }
+unsafe fn dacl_api(ok: i32,stage: &'static str) -> DaclResult<()> {
+    if ok == 0 { let code=GetLastError(); return Err(DaclObservationError {stage,winerror:Some(code)}); }
+    Ok(())
+}
+fn dacl_target(p: &Path,directory: bool,roles: &[(&str,token::LocalSid)]) -> DaclResult<serde_json::Value> {
+    let file=OpenOptions::new().access_mode(READ_CONTROL | FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT).open(p)
+        .map_err(|error| DaclObservationError {stage:"open-fixed-target",winerror:error.raw_os_error().and_then(|e|u32::try_from(e).ok())})?;
+    unsafe {
+        let mut info: BY_HANDLE_FILE_INFORMATION=std::mem::zeroed();
+        dacl_api(GetFileInformationByHandle(file.as_raw_handle() as isize,&mut info),"target-handle-information")?;
+        if info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+            || (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0) != directory
+            || (!directory && info.nNumberOfLinks != 1) { return Err(dacl_bad("target-no-reparse-single-link-shape")); }
+        let mut descriptor=null_mut();let mut dacl=null_mut();
+        let code=GetSecurityInfo(file.as_raw_handle() as isize,SE_FILE_OBJECT,DACL_SECURITY_INFORMATION,
+            null_mut(),null_mut(),&mut dacl,null_mut(),&mut descriptor);
+        if code != 0 { return Err(DaclObservationError {stage:"get-target-dacl",winerror:Some(code)}); }
+        let result=(|| -> DaclResult<serde_json::Value> {
+            if dacl.is_null() { return Ok(serde_json::json!({"nullDacl":true,"aces":[]})); }
+            if IsValidAcl(dacl) == 0 { return Err(dacl_bad("validate-target-dacl")); }
+            if (*dacl).AceCount > 64 { return Err(dacl_bad("target-ace-count-bound")); }
+            let mut records=Vec::new();
+            for index in 0..(*dacl).AceCount {
+                let mut raw=null_mut();dacl_api(GetAce(dacl,index as u32,&mut raw),"get-target-ace")?;
+                let header=&*(raw as *const ACE_HEADER);
+                if header.AceSize < 8 { return Err(dacl_bad("target-ace-size")); }
+                // ACCESS_ALLOWED/DENIED_ACE use the same mask/SID layout. Unknown
+                // forms retain type/flags/mask only and are normalized to OTHER.
+                let mask=std::ptr::read_unaligned((raw as *const u8).add(4).cast::<u32>());
+                let mut role="OTHER";
+                if header.AceType == 0 || header.AceType == 1 {
+                    let sid: *mut std::ffi::c_void=(raw as *mut u8).add(8).cast();
+                    if header.AceSize < 16 { return Err(dacl_bad("target-ace-sid-header")); }
+                    let subs=*((sid as *const u8).add(1)) as usize;
+                    if 8 + 8 + subs*4 > header.AceSize as usize { return Err(dacl_bad("target-ace-sid-bounds")); }
+                    if IsValidSid(sid) == 0 { return Err(dacl_bad("validate-target-trustee")); }
+                    for (label,known) in roles { if EqualSid(sid,known.as_ptr()) != 0 { role=*label;break; } }
+                }
+                records.push(serde_json::json!({"index":index,"type":header.AceType,"mask":mask,
+                    "maskHex":format!("0x{mask:08x}"),"flags":header.AceFlags,"trusteeRole":role,
+                    "fileDeleteChild":mask & FILE_DELETE_CHILD != 0}));
+            }
+            Ok(serde_json::json!({"nullDacl":false,"aces":records}))
+        })();
+        LocalFree(descriptor as HLOCAL);result
+    }
+}
+fn fixed_target_dacls(owner: &str,account: &str,cap: Option<&str>) -> serde_json::Value {
+    let mut definitions=vec![("OWNER",owner),("SANDBOX_ACCOUNT",account),("EVERYONE","S-1-1-0"),
+        ("BUILTIN_USERS","S-1-5-32-545"),("ADMINISTRATORS","S-1-5-32-544"),("SYSTEM","S-1-5-18")];
+    if let Some(cap)=cap { definitions.push(("CAPABILITY",cap)); }
+    let roles=definitions.into_iter().map(|(label,sid)|token::LocalSid::from_string(sid).map(|sid|(label,sid))).collect::<Result<Vec<_>>>();
+    let targets=[("WORK_ROOT","work",true),("DENIED_WRITE_DIR",r"work\denied-write",true),
+        ("DENIED_READ_DIR",r"work\denied-read",true),("DENIED_READ_FILE",r"work\denied-read\secret.txt",false),
+        ("OUTSIDE_WORLD_DIR",r"fixtures\outside-world",true)];
+    serde_json::Value::Array(targets.into_iter().map(|(target,name,directory)| {
+        let result=match &roles { Ok(roles)=>dacl_target(&path(name),directory,roles),Err(_)=>Err(dacl_bad("normalize-known-trustee-roles")) };
+        match result {
+            Ok(mut value)=> { value["target"]=serde_json::json!(target);value["status"]=serde_json::json!("OBSERVED");value["error"]=serde_json::Value::Null;value },
+            Err(error)=>serde_json::json!({"target":target,"status":"INCONCLUSIVE","aces":[],
+                "error":{"stage":error.stage,"winerror":error.winerror}}),
+        }
+    }).collect())
+}
 fn pin_file(p: &Path, pins: &mut Vec<File>, digest: &mut BTreeMap<String,String>) -> Result<()> {
     let m = std::fs::symlink_metadata(p)?;
     ensure!(m.is_file() && m.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0 && m.len() <= 128*1024*1024,
@@ -296,6 +368,7 @@ fn run_suite(owner: &str, digest: &BTreeMap<String,String>, pins: &mut Vec<File>
         let record = serde_json::json!({"schemaVersion":1,"scope":"LAB_PYTHON_ISOLATION_ACCEPTANCE", "nativeValidated":false,
             "frame":frame,"script":lab::parse_script(frame).ok(),"scriptError":lab::parse_script(frame).err().map(|e|format!("{e:#}")),
             "assessment":assessment,"loopbackBefore":before,"loopbackAfter":after,
+            "fixedTargetDacls":fixed_target_dacls(owner,&frame.account_sid,Some(&frame.capability_sid)),
             "outputBytesMatch":positive_output(frame.case),"ordinaryOutsideControlHealthy":ordinary_ok,
             "outsideWriteArtifact":{"present":outside_artifact.as_ref().ok(),"error":outside_artifact.err().map(|e|format!("{e:#}"))},
             "deniedWriteArtifact":{"present":denied_artifact.as_ref().ok(),"error":denied_artifact.err().map(|e|format!("{e:#}"))}});
@@ -337,6 +410,7 @@ fn setup_lab(owner: &str) -> Result<()> {
         network::verify_offline_protection(identity.sid())?;
         fresh_write(&path(r"trusted\python-isolation-baseline.json"),&serde_json::to_vec_pretty(&serde_json::json!({
             "ownerSid":owner,"accountSid":identity.sid(),"inputs":digest,
+            "fixedTargetDacls":fixed_target_dacls(owner,identity.sid(),None),
             "policyHash":hash(&serde_json::to_vec(&lab::fixed_policy())?)?,"nativeValidated":false}))?)
     })();
     if prepared.is_err() { setup::disable_offline_account(&path("store"),owner).context("setup failed and disable recovery failed")?; }

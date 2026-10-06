@@ -22,7 +22,8 @@ class IsolationFixtureTests(unittest.TestCase):
             error.winerror = code
             with self.subTest(code=code), patch.object(fixture, "read_exact", side_effect=error):
                 self.assertEqual(fixture.probe(lambda: fixture.read_exact(None, None)),
-                                 {"outcome": "PERMISSION_DENIED", "winerror": code})
+                                 {"outcome": "PERMISSION_DENIED", "winerror": code,
+                                  "errno": None, "errorType": "OSError"})
 
     def test_missing_refused_timeout_and_other_errors_are_inconclusive(self):
         for code in (None, 2, 3, 32, 10060, 10061, 10065):
@@ -32,7 +33,41 @@ class IsolationFixtureTests(unittest.TestCase):
                 raise error
             with self.subTest(code=code):
                 self.assertEqual(fixture.probe(raises),
-                                 {"outcome": "INCONCLUSIVE", "winerror": code})
+                                 {"outcome": "INCONCLUSIVE", "winerror": code,
+                                  "errno": None, "errorType": "OSError"})
+
+    def test_errno_only_permission_error_preserves_crt_evidence(self):
+        for number in (fixture.errno.EACCES, fixture.errno.EPERM):
+            error = PermissionError(number, "never publish this exception text")
+            with self.subTest(errno=number), patch.object(fixture, "read_exact", side_effect=error):
+                observed = fixture.probe(lambda: fixture.read_exact(None, None))
+                self.assertEqual(observed, {"outcome": "PERMISSION_DENIED", "winerror": None,
+                                           "errno": number, "errorType": "PermissionError"})
+                self.assertNotIn("never publish", str(observed))
+
+    def test_nonpermission_type_cannot_pass_with_errno_only(self):
+        error = OSError()
+        error.errno = fixture.errno.EACCES
+        with patch.object(fixture, "read_exact", side_effect=error):
+            observed = fixture.probe(lambda: fixture.read_exact(None, None))
+        self.assertEqual(observed, {"outcome": "INCONCLUSIVE", "winerror": None,
+                                   "errno": fixture.errno.EACCES, "errorType": "OSError"})
+
+    def test_refused_winerror_cannot_be_overridden_by_permission_errno(self):
+        error = PermissionError(fixture.errno.EACCES, "synthetic")
+        error.winerror = 10061
+        with patch.object(fixture, "read_exact", side_effect=error):
+            observed = fixture.probe(lambda: fixture.read_exact(None, None))
+        self.assertEqual(observed["outcome"], "INCONCLUSIVE")
+        self.assertEqual(observed["winerror"], 10061)
+
+    def test_missing_file_and_timeout_keep_actual_type_and_errno(self):
+        for error in (FileNotFoundError(fixture.errno.ENOENT, "synthetic"),
+                      TimeoutError(fixture.errno.ETIMEDOUT, "synthetic")):
+            with self.subTest(error=type(error).__name__), patch.object(fixture, "read_exact", side_effect=error):
+                observed = fixture.probe(lambda: fixture.read_exact(None, None))
+                self.assertEqual(observed, {"outcome": "INCONCLUSIVE", "winerror": None,
+                                           "errno": error.errno, "errorType": type(error).__name__})
 
     def test_exclusive_write_never_overwrites_existing_synthetic_file(self):
         with tempfile.TemporaryDirectory() as directory:

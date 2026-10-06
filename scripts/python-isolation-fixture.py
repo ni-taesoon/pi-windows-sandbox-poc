@@ -1,4 +1,5 @@
 """Immutable, fixed Python 3.12.10 acceptance fixture. No user paths or endpoints."""
+import errno
 import json
 import os
 import pathlib
@@ -20,9 +21,13 @@ def probe(action):
         return {"outcome": "SUCCESS"}
     except OSError as error:
         code = getattr(error, "winerror", None)
-        if code in (5, 10013):
-            return {"outcome": "PERMISSION_DENIED", "winerror": code}
-        return {"outcome": "INCONCLUSIVE", "winerror": code}
+        number = getattr(error, "errno", None)
+        detail = {"winerror": code, "errno": number, "errorType": type(error).__name__[:64]}
+        # CRT file errors can be PermissionError/EACCES with no native winerror.
+        # Preserve the actual fields; never synthesize a Windows error code.
+        permission = code in (5, 10013) or (code is None and type(error) is PermissionError
+                                          and number in (errno.EACCES, errno.EPERM))
+        return {"outcome": "PERMISSION_DENIED" if permission else "INCONCLUSIVE", **detail}
 
 def read_exact(path, expected):
     if path.read_bytes() != expected:
