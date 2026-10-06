@@ -64,7 +64,7 @@ pub unsafe fn run_fixed_python_acceptance(
     send(&pipe, &payload, startup)?;
     let mut last = None;
     #[cfg(feature="lab-python-online-pdf")]
-    let mut online_install_passed=None;
+    let mut online_install_passed: Option<bool> = None;
     #[cfg(feature="lab-python-logon-sid-comparison")]
     let mut recorded_cases=0usize;
     for case in Case::ALL {
@@ -158,7 +158,7 @@ pub fn fixed_python_isolation_helper_main(name: &str, expected_broker: u32) -> R
         #[cfg(feature="lab-python-logon-sid-comparison")]
         let mut session:Option<(Handle,lab::SessionTokenConfiguration)>=None;
         #[cfg(feature="lab-python-online-pdf")]
-        let mut online_install_passed=None;
+        let mut online_install_passed: Option<bool> = None;
         for case in Case::ALL {
             #[cfg(feature="lab-python-online-pdf")]
             if case==Case::OnlinePdf && !online_install_passed.context("PDF requires an acknowledged install frame")? {

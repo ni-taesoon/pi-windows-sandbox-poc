@@ -301,7 +301,7 @@
       "destination": "native/windows-sandbox/src/python_isolation/broker.rs",
       "upstream": [],
       "origin": "new default-off fixed Python acceptance laboratory source",
-      "adapted_sha256": "02f8aeea0e28e43be27bfa591a2bfae3657c0f982b838705bcfbd9dd39754489"
+      "adapted_sha256": "78c4067e8447805cd000d9261b7fa68ec7057a3bf5716e2f9851ce624fc581f0"
     },
     {
       "destination": "native/windows-sandbox/src/python_isolation/observer.rs",
