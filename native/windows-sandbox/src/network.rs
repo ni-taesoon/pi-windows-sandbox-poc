@@ -13,7 +13,9 @@ pub fn expected_wfp_filter_count() -> usize {
 
 /// Identifies the compiled policy for comparisons with historical lab runs.
 pub fn wfp_policy_provenance() -> &'static str {
-    if cfg!(feature = "lab-python-policy-repair-comparison") {
+    if cfg!(feature = "lab-python-codex-policy-acceptance") {
+        "codex-policy-with-lab-owned-account-connect-block-v1"
+    } else if cfg!(feature = "lab-python-policy-repair-comparison") {
         "lab-owned-account-connect-block-v1"
     } else {
         "baseline-port-icmp-v1"

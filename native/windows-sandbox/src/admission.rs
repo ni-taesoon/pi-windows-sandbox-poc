@@ -57,7 +57,8 @@ const SHARE: u32 = FILE_SHARE_READ | FILE_SHARE_WRITE; // Never share deletion.
                                                        // This requests existing broker read access; it changes no directory DACL.
 const GUARDED_DIRECTORY_QUERY_ACCESS: u32 = FILE_TRAVERSE | FILE_READ_ATTRIBUTES;
 const ACCESS: u32 = READ_CONTROL | WRITE_DAC | FILE_READ_ATTRIBUTES | FILE_READ_DATA;
-const WRITE_ALLOW: u32 = FILE_GENERIC_WRITE | DELETE | FILE_DELETE_CHILD;
+// Match Codex: inherited object DELETE, never a parent DELETE_CHILD grant.
+const WRITE_ALLOW: u32 = crate::policy_masks::WRITE_ALLOW;
 // Avoid READ_CONTROL/SYNCHRONIZE carried by FILE_GENERIC_WRITE in a deny ACE.
 const WRITE_DENY: u32 = crate::policy_masks::WRITE_DENY;
 
@@ -155,7 +156,7 @@ fn already_has_sid(target: &Target, sid: *mut c_void) -> Result<bool> {
 }
 /// Re-read the final DACL through the original pin after all inheritance writes.
 /// Missing, malformed or complex coverage must prevent the helper from resuming.
-fn verify_final_deny(target: &Target, sid: *mut c_void) -> Result<()> {
+fn read_final_aces(target: &Target, sid: *mut c_void) -> Result<Vec<SimpleAce>> {
     unsafe {
         let mut sd = null_mut();
         let mut dacl = null_mut();
@@ -169,11 +170,11 @@ fn verify_final_deny(target: &Target, sid: *mut c_void) -> Result<()> {
             null_mut(),
             &mut sd,
         );
-        ensure!(status == 0, "read final deny ACL failed: {status}");
-        let result = (|| -> Result<()> {
+        ensure!(status == 0, "read final ACL failed: {status}");
+        let result = (|| -> Result<Vec<SimpleAce>> {
             ensure!(
                 !dacl.is_null() && IsValidAcl(dacl) != 0,
-                "null/invalid final deny DACL unsupported"
+                "null/invalid final DACL unsupported"
             );
             let mut aces = Vec::with_capacity((*dacl).AceCount as usize);
             for index in 0..(*dacl).AceCount {
@@ -186,7 +187,7 @@ fn verify_final_deny(target: &Target, sid: *mut c_void) -> Result<()> {
                 let kind = match header.AceType {
                     0 => AceKind::Allow,
                     1 => AceKind::Deny,
-                    _ => anyhow::bail!("complex final deny ACE unsupported"),
+                    _ => anyhow::bail!("complex final ACE unsupported"),
                 };
                 // A simple ACE has a four-byte header, a mask and a complete SID.
                 // Bound the SID before invoking native SID validation/comparison.
@@ -210,12 +211,23 @@ fn verify_final_deny(target: &Target, sid: *mut c_void) -> Result<()> {
                     account_sid: EqualSid(ace_sid.cast(), sid) != 0,
                 });
             }
-            admission_plan::verify_deny_coverage(&aces, target.mask, target.is_directory)
-                .map_err(|error| anyhow::anyhow!("final deny coverage failed: {error:?}"))
+            Ok(aces)
         })();
         LocalFree(sd as HLOCAL);
-        result.with_context(|| format!("verify denied target {}", target.path.display()))
+        result.with_context(|| format!("read final target ACL {}", target.path.display()))
     }
+}
+fn verify_final_deny(target: &Target, sid: *mut c_void) -> Result<()> {
+    let aces = read_final_aces(target, sid)?;
+    admission_plan::verify_deny_coverage(&aces, target.mask, target.is_directory)
+        .map_err(|error| anyhow::anyhow!("final deny coverage failed: {error:?}"))
+        .with_context(|| format!("verify denied target {}", target.path.display()))
+}
+fn verify_final_grant(target: &Target, sid: *mut c_void) -> Result<()> {
+    let aces = read_final_aces(target, sid)?;
+    admission_plan::verify_grant_coverage(&aces, target.mask, target.is_directory)
+        .map_err(|error| anyhow::anyhow!("final grant coverage failed: {error:?}"))
+        .with_context(|| format!("verify granted target {}", target.path.display()))
 }
 fn enumerate(
     path: &Path,
@@ -402,7 +414,7 @@ impl AdmittedLaunch {
         let desktop = PrivateDesktop::for_token_with_cap(base.raw(), Some(&capability_string))?;
         let (mut targets, mut pins, mut guards) = (Vec::new(), Vec::new(), Vec::new());
         // Retain target selection and pins. The transaction below applies all grants
-        // before denies, then verifies existing and inheritable deny coverage.
+        // before denies, then verifies all final grants and deny coverage.
         for path in &request.policy.deny_read {
             enumerate(
                 Path::new(path),
@@ -510,7 +522,18 @@ impl AdmittedLaunch {
                     }
                 })
             },
-            |index| verify_final_deny(&targets[index], account_sid.as_ptr()),
+            |index| {
+                let target = &targets[index];
+                if target.mode == GRANT_ACCESS {
+                    // SetEntriesInAclW may merge a prior grant. Re-read both
+                    // intended trustees after all inheritance writes and fail
+                    // closed if any forbidden parent delete right survives.
+                    verify_final_grant(target, account_sid.as_ptr())?;
+                    verify_final_grant(target, cap.as_ptr())
+                } else {
+                    verify_final_deny(target, account_sid.as_ptr())
+                }
+            },
             |index| {
                 let target = &targets[index];
                 let account = edit_acl(target, account_sid.as_ptr(), REVOKE_ACCESS, 0);

@@ -233,6 +233,8 @@ fn inputs() -> Result<(Vec<File>, BTreeMap<String,String>)> {
     pin_directory(&path(r"fixtures\outside-world"), true, &mut pins)?;
     #[cfg(feature="lab-python-logon-sid-comparison")]
     pin_directory(&path(r"fixtures\outside-logon"),false,&mut pins)?;
+    #[cfg(feature="lab-python-codex-policy-acceptance")]
+    pin_directory(&path(r"fixtures\outside-private"),false,&mut pins)?;
     let mut digest = BTreeMap::new();
     for name in ["python_isolation_acceptance.exe", "pi-windows-sandbox.exe", "python-isolation-fixture.py",
         "python-isolation-stage.json", "python-isolation-runtime-manifest.json"] {
@@ -272,7 +274,10 @@ fn verify_fixture() -> Result<()> {
         let mut names: Vec<String> = std::fs::read_dir(path(name))?.map(|e| Ok(e?.file_name().to_string_lossy().into_owned())).collect::<Result<_>>()?;
         names.sort(); let mut allowed = allowed; allowed.sort();
         ensure!(names == allowed, "fixture must be fresh: {name}");
-    } Ok(())
+    }
+    #[cfg(feature="lab-python-codex-policy-acceptance")]
+    ensure!(std::fs::read_dir(path(r"fixtures\outside-private"))?.next().is_none(),"fresh empty private outside leaf required");
+    Ok(())
 }
 struct Listener { socket: TcpListener, address: SocketAddr }
 impl Listener {
@@ -335,6 +340,60 @@ fn artifact_presence(p: &Path) -> Result<bool> {
 }
 fn positive_output(case: Case) -> bool { case.boundary() && file_bytes_match(
     &path("work").join(format!("python-{}.txt",case.label())),lab::OUTPUT) }
+#[cfg(feature="lab-python-codex-policy-acceptance")]
+fn codex_artifacts() -> serde_json::Value {
+    let inspect=|name:&str,directory:bool,expected:Option<&[u8]>| -> Result<serde_json::Value> {
+        let mut file=OpenOptions::new().access_mode(FILE_GENERIC_READ).share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT).open(path(name))?;
+        let mut info:BY_HANDLE_FILE_INFORMATION=unsafe{std::mem::zeroed()};
+        ensure!(unsafe{GetFileInformationByHandle(file.as_raw_handle() as isize,&mut info)}!=0
+            && info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT==0
+            && (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY!=0)==directory
+            && (directory || info.nNumberOfLinks==1),"protected artifact identity/shape mismatch");
+        // Keep this no-delete-shared identity handle alive through bounded bytes
+        // or empty-directory observation. Never reopen a file by path for bytes.
+        let content_matches=if let Some(expected)=expected {
+            let mut bytes=Vec::new();(&mut file).take(expected.len() as u64+1).read_to_end(&mut bytes)?;
+            bytes==expected
+        } else {
+            ensure!(directory,"missing fixed file content expectation");
+            std::fs::read_dir(path(name))?.next().transpose()?.is_none()
+        };
+        Ok(serde_json::json!({"identity":{"volumeSerialNumber":info.dwVolumeSerialNumber,
+            "fileIndexHigh":info.nFileIndexHigh,"fileIndexLow":info.nFileIndexLow},"contentMatches":content_matches}))
+    };
+    let owner_control=inspect(r"fixtures\outside-private\owner-control.txt",false,Some(b"CODEX_PRIVATE_OWNER_CONTROL\n"));
+    let file=inspect(r"work\codex-protected-file.txt",false,Some(b"CODEX_PROTECTED_FILE\n"));
+    let directory=inspect(r"work\codex-protected-dir",true,None);
+    let names=[r"work\codex-protected-file-renamed.txt",r"work\codex-protected-dir-renamed",
+        r"work\codex-protected-dir\codex-write.txt",r"work\codex-allowed-file.txt",r"work\codex-allowed-file-renamed.txt",
+        r"work\codex-allowed-dir",r"work\codex-allowed-dir-renamed"];
+    let absences:Vec<_>=names.iter().map(|name| {
+        let presence=artifact_presence(&path(name));
+        serde_json::json!({"path":name,"present":presence.as_ref().ok(),"error":presence.err().map(|e|format!("{e:#}"))})
+    }).collect();
+    let original_file_presence=artifact_presence(&path(r"work\codex-protected-file.txt"));
+    let original_dir_presence=artifact_presence(&path(r"work\codex-protected-dir"));
+    // Definite mutation survives missing/malformed Python output. Query errors
+    // are inconclusive, never transformed into an access-denial pass.
+    let violation=original_file_presence.as_ref().is_ok_and(|v|!*v)
+        || original_dir_presence.as_ref().is_ok_and(|v|!*v)
+        || file.as_ref().is_ok_and(|v|v["contentMatches"]==false)
+        || directory.as_ref().is_ok_and(|v|v["contentMatches"]==false)
+        || absences.iter().take(3).any(|v|v["present"]==true);
+    let verified=file.as_ref().is_ok_and(|v|v["contentMatches"]==true)
+        && directory.as_ref().is_ok_and(|v|v["contentMatches"]==true)
+        && absences.iter().all(|v|v["present"]==false);
+    serde_json::json!({"ownerControlIdentity":owner_control.as_ref().ok().map(|v|&v["identity"]),
+        "ownerControlBytesMatch":owner_control.as_ref().ok().map(|v|&v["contentMatches"]),
+        "protectedFileIdentity":file.as_ref().ok().map(|v|&v["identity"]),
+        "protectedDirIdentity":directory.as_ref().ok().map(|v|&v["identity"]),
+        "protectedFileBytesMatch":file.as_ref().ok().map(|v|&v["contentMatches"]),
+        "protectedDirectoryEmpty":directory.as_ref().ok().map(|v|&v["contentMatches"]),"expectedAbsent":absences,
+        "protectedMutationObserved":violation,"artifactsVerified":verified,
+        "errors":[file.err().map(|e|format!("{e:#}")),directory.err().map(|e|format!("{e:#}")),
+            owner_control.err().map(|e|format!("{e:#}"))]})
+}
 fn run_suite(owner: &str, digest: &BTreeMap<String,String>, pins: &mut Vec<File>) -> Result<serde_json::Value> {
     let mut ignored = BTreeMap::new(); pin_file(&path(r"trusted\python-isolation-baseline.json"),pins,&mut ignored)?;
     let baseline: serde_json::Value = serde_json::from_slice(&std::fs::read(path(r"trusted\python-isolation-baseline.json"))?)?;
@@ -352,9 +411,11 @@ fn run_suite(owner: &str, digest: &BTreeMap<String,String>, pins: &mut Vec<File>
     network::verify_offline_protection(identity.sid())?; drop(identity);
     let listeners = Loopback::new(); let mut before = listeners.sample();
     let mut frames = Vec::new(); let mut assessments: Vec<(Case,Assessment)> = Vec::new(); let mut ordinary_ok = false;
+    #[cfg(feature="lab-python-codex-policy-acceptance")]
+    let codex_fixtures=std::cell::RefCell::new(None::<serde_json::Value>);
     #[cfg(feature="lab-python-logon-sid-comparison")]
     let session_grant=std::cell::RefCell::new(None::<lab::session_grant::SessionGrant>);
-    let run = unsafe { broker::run_fixed_python_acceptance(FixedRequest::new(lab::request(Case::StrictBoundary,
+    let run = unsafe { broker::run_fixed_python_acceptance(FixedRequest::new(lab::request(Case::initial(),
         GetCurrentProcessId(),policy_hash.clone()))?, &mut |frame: &Frame| {
         let after = listeners.sample();
         if frame.case == Case::OrdinaryOutside {
@@ -373,20 +434,67 @@ fn run_suite(owner: &str, digest: &BTreeMap<String,String>, pins: &mut Vec<File>
         let outside_artifact = if frame.case.boundary() {
             artifact_presence(&path(r"fixtures\outside-world").join(format!("{}-write.txt",frame.case.label())))
         } else { Ok(false) };
+        let outside_bytes_match=frame.case.boundary() && file_bytes_match(
+            &path(r"fixtures\outside-world").join(format!("{}-write.txt",frame.case.label())),b"SYNTHETIC_OUTSIDE_WRITE\n");
         let denied_artifact = if frame.case.boundary() {
             artifact_presence(&path(r"work\denied-write").join(format!("{}.txt",frame.case.label())))
         } else { Ok(false) };
         // Unexpected creation is a failure even if a later Python error prevented its JSON.
-        if outside_artifact.as_ref().is_ok_and(|present| *present) { assessment.outside_write = Verdict::PolicyBoundaryFail; }
+        if outside_artifact.as_ref().is_ok_and(|present| *present) {
+            assessment.outside_write = if frame.case.codex() {Verdict::KnownExceptionObserved} else {Verdict::PolicyBoundaryFail};
+        }
         else if outside_artifact.is_err() && assessment.outside_write != Verdict::PolicyBoundaryFail { assessment.outside_write = Verdict::Inconclusive; }
+        if frame.case.codex() && frame.case.boundary() && assessment.outside_write==Verdict::KnownExceptionObserved {
+            if !outside_artifact.as_ref().is_ok_and(|present|*present) {assessment.outside_write=Verdict::Inconclusive;}
+            // Keep an actual outside write labeled as the known exception, while
+            // requiring exact independent artifact bytes for bounded acceptance.
+            if !outside_bytes_match {assessment.python_success=false;}
+        }
         if denied_artifact.as_ref().is_ok_and(|present| *present) { assessment.explicit_denies = Verdict::PolicyBoundaryFail; }
         else if denied_artifact.is_err() && assessment.explicit_denies != Verdict::PolicyBoundaryFail { assessment.explicit_denies = Verdict::Inconclusive; }
         if frame.case.boundary() && ["tcp4","tcp6"].iter().any(|k| after[k]["unexpectedAccepts"].as_u64().is_some_and(|n|n>0)) {
             assessment.loopback_only = Verdict::PolicyBoundaryFail;
         }
+        #[cfg(feature="lab-python-codex-policy-acceptance")]
+        let codex_evidence={
+            let private=artifact_presence(&path(r"fixtures\outside-private\codex-write.txt"));
+            let mut artifact=codex_artifacts();
+            let receipt=codex_fixtures.borrow();
+            let receipt=receipt.as_ref().context("Codex fixture receipt missing before first frame")?;
+            let expected_identity=|role:&str|receipt["targets"].as_array().and_then(|targets|
+                targets.iter().find(|target|target["target"]==role)).map(|target|&target["identity"]);
+            let identity_matches=|actual:&str,role:&str|expected_identity(role).is_some_and(|expected|
+                expected.is_object() && artifact[actual].is_object() && artifact[actual]==*expected);
+            let identities_match=identity_matches("protectedFileIdentity","CODEX_PROTECTED_FILE")
+                && identity_matches("protectedDirIdentity","CODEX_PROTECTED_DIR");
+            let identity_changed=[("protectedFileIdentity","CODEX_PROTECTED_FILE"),("protectedDirIdentity","CODEX_PROTECTED_DIR")]
+                .iter().any(|(actual,role)|artifact[*actual].is_object() && expected_identity(role).is_some_and(|expected|
+                    expected.is_object() && artifact[*actual]!=*expected));
+            let owner_control=artifact["ownerControlBytesMatch"]==true && identity_matches("ownerControlIdentity","PRIVATE_OWNER_CONTROL");
+            artifact["identitiesMatchPreparedTargets"]=serde_json::json!(identities_match);
+            if identity_changed {artifact["protectedMutationObserved"]=serde_json::json!(true);}
+            if !identities_match {artifact["artifactsVerified"]=serde_json::json!(false);}
+            let fixture_verified=["ownerControlWriteReadVerified","protectedTargetsVerified","targetHandlesReleased",
+                "lateTargetsCreatedAfterAdmission","protectedDirectoryEmpty","parentDeleteChildBypassAbsent"]
+                .iter().all(|key|receipt[*key]==true);
+            if frame.case.codex() && frame.case.boundary() {
+                if private.as_ref().is_ok_and(|v|*v) {assessment.private_outside_write=Verdict::PolicyBoundaryFail;}
+                else if private.is_err() || !owner_control || !fixture_verified {assessment.private_outside_write=Verdict::Inconclusive;}
+            }
+            if frame.case.file_operations() {
+                if artifact["protectedMutationObserved"]==true {assessment.file_operations=Verdict::PolicyBoundaryFail;}
+                else if artifact["artifactsVerified"]!=true || !fixture_verified {assessment.file_operations=Verdict::Inconclusive;}
+            }
+            serde_json::json!({"fixtureReceiptVerified":fixture_verified,"ownerControlWriteReadVerified":owner_control,
+                "privateWriteArtifact":{"present":private.as_ref().ok(),"error":private.err().map(|e|format!("{e:#}"))},
+                "fileOperationsArtifacts":artifact})
+        };
+        #[cfg(not(feature="lab-python-codex-policy-acceptance"))]
+        let codex_evidence=serde_json::Value::Null;
         let record = serde_json::json!({"schemaVersion":1,"scope":"LAB_PYTHON_ISOLATION_ACCEPTANCE", "nativeValidated":false,
             "labFeature":lab::compiled_feature(),"wfpPolicy":network::wfp_policy_provenance(),
             "expectedWfpFilterCount":network::expected_wfp_filter_count(),
+            "codexEvidence":codex_evidence,"absoluteWorkspaceWriteAcceptance":false,
             "frame":frame,"script":lab::parse_script(frame).ok(),"scriptError":lab::parse_script(frame).err().map(|e|format!("{e:#}")),
             "assessment":assessment,"loopbackBefore":before,"loopbackAfter":after,
             "fixedTargetDacls":fixed_target_dacls(owner,&frame.account_sid,Some(&frame.capability_sid),
@@ -394,11 +502,30 @@ fn run_suite(owner: &str, digest: &BTreeMap<String,String>, pins: &mut Vec<File>
             "sessionGrantArtifactBytesMatch":session_artifact_matches,"sessionGrantVerified":session_grant_verified,
             "sessionGrantBoundaryException":frame.case.session(),"strictWorkspaceOnlyAcceptance":false,
             "outputBytesMatch":positive_output(frame.case),"ordinaryOutsideControlHealthy":ordinary_ok,
-            "outsideWriteArtifact":{"present":outside_artifact.as_ref().ok(),"error":outside_artifact.err().map(|e|format!("{e:#}"))},
+            "outsideWriteArtifact":{"bytesMatch":outside_bytes_match,"present":outside_artifact.as_ref().ok(),"error":outside_artifact.err().map(|e|format!("{e:#}"))},
             "deniedWriteArtifact":{"present":denied_artifact.as_ref().ok(),"error":denied_artifact.err().map(|e|format!("{e:#}"))}});
         fresh_write(&path("trusted").join(format!("python-isolation-{}.json",frame.case.name())),&serde_json::to_vec_pretty(&record)?)?;
         frames.push(record); assessments.push((frame.case,assessment)); before = after;
         Ok(())
+    },
+    #[cfg(feature="lab-python-codex-policy-acceptance")]
+    &mut |identity:&lab::VerifiedCodexIdentity| {
+        ensure!(codex_fixtures.borrow().is_none(),"single fixed Codex fixture preparation required");
+        let prepared=lab::codex_fixtures::prepare(identity);
+        let receipt=match prepared {
+            Ok(receipt)=>receipt,
+            Err(error)=>{
+                fresh_write(&path(r"trusted\python-isolation-codex-fixtures.json"),&serde_json::to_vec_pretty(
+                    &serde_json::json!({"schemaVersion":1,"status":"PREPARE_FAILED","error":format!("{error:#}")}))?)?;
+                return Err(error);
+            }
+        };
+        // Durable owner receipt precedes callback return, therefore helper resume.
+        let bytes=serde_json::to_vec_pretty(&receipt)?;
+        fresh_write(&path(r"trusted\python-isolation-codex-fixtures.json"),&bytes)?;
+        ensure!(file_bytes_match(&path(r"trusted\python-isolation-codex-fixtures.json"),&bytes),
+            "durable Codex fixture receipt readback mismatch");
+        *codex_fixtures.borrow_mut()=Some(receipt);Ok(())
     },
     #[cfg(feature="lab-python-logon-sid-comparison")]
     &mut |identity:&lab::VerifiedSessionIdentity| {
@@ -443,7 +570,17 @@ fn run_suite(owner: &str, digest: &BTreeMap<String,String>, pins: &mut Vec<File>
                 else { a.descendant_cleanup == Verdict::ObservedPass });
     let candidate=lab::candidate_acceptance(&assessments,ordinary_ok,run.is_ok());
     let candidate_core=candidate.bounded_core_acceptance;
-    let summary = serde_json::json!({"schemaVersion":1,"scope":"LAB_PYTHON_ISOLATION_ACCEPTANCE","nativeValidated":false,
+    #[cfg(feature="lab-python-codex-policy-acceptance")]
+    let codex_fixture_verified=codex_fixtures.borrow().as_ref().is_some_and(|r|
+        r["ownerControlWriteReadVerified"]==true && r["protectedTargetsVerified"]==true && r["targetHandlesReleased"]==true);
+    #[cfg(not(feature="lab-python-codex-policy-acceptance"))]
+    let codex_fixture_verified=false;
+    let codex_core=lab::codex_policy_acceptance(&assessments,ordinary_ok,run.is_ok(),codex_fixture_verified);
+    let known_exceptions:Vec<_>=frames.iter().filter(|v|v["frame"]["case"]=="codex-boundary").map(|v|
+        serde_json::json!({"target":"OUTSIDE_WORLD_DIR","preexistingPermission":"Everyone Modify",
+            "result":v["assessment"]["outsideWrite"],"scriptProbe":v["script"]["outsideWrite"],
+            "artifact":v["outsideWriteArtifact"],"absoluteWorkspaceWriteAcceptance":false})).collect();
+    let mut summary = serde_json::json!({"schemaVersion":1,"scope":"LAB_PYTHON_ISOLATION_ACCEPTANCE","nativeValidated":false,
         "normalValidationEligible":false,"pythonValidationEligible":false,"fullPass":false,
         "labFeature":lab::compiled_feature(),"wfpPolicy":network::wfp_policy_provenance(),
         "expectedWfpFilterCount":network::expected_wfp_filter_count(),
@@ -480,6 +617,41 @@ fn run_suite(owner: &str, digest: &BTreeMap<String,String>, pins: &mut Vec<File>
             "runtime inventory is per-run identity from official staging, not independent historical provenance",
             "fresh disposable-lab-only result: same-account startup/stdio handle race is not closed or audited for production",
             "preexisting dedicated-account processes are not independently enumerated; fresh setup is a lab prerequisite"]});
+    #[cfg(feature="lab-python-codex-policy-acceptance")]
+    {
+        // New profile has its own declared contract. Do not expose inapplicable
+        // historical candidate/session explanations as if those cases ran.
+        for key in ["candidateAttemptStatus","candidatePythonSuccess","candidateIdentityAcceptance",
+            "candidateFilesystemAcceptance","candidateLoopbackAcceptance","candidateCleanupAcceptance",
+            "candidateBoundedCoreAcceptance","sessionProfileAcceptance","sessionGrantCleanup","sessionProfileDefinition",
+            "sessionExceptionResult","sessionArtifactCleanupLimitation","candidateAcceptanceDefinition",
+            "candidateTokenReadbackScope","composedRepairScope"] {summary.as_object_mut().unwrap().remove(key);}
+        summary["limitations"]=serde_json::json!([
+            "parent-death NOT_TESTED; full-isolation and absolute workspace-only acceptance remain false",
+            "TCP4/TCP6 fixed loopback endpoints only; no all-outbound, UDP, DNS, or external-endpoint claim",
+            "write restriction is not a read allowlist; synthetic outside read remains separate",
+            "Everyone-Modify outside write is a declared observed exception, not silently repaired",
+            "fresh disposable VM required; same-account startup/stdio races and preexisting processes are not independently closed or audited",
+            "desktop leaf observation can be unavailable; window-station attachment is not independently observed",
+            "late protected targets are lab fixtures only; no caller-configurable ACL API or production revocation guarantee",
+            "unchanged original token constructor with separately identified Pi-owned fourteen-filter WFP enhancement"]);
+        summary["status"]=serde_json::json!(if boundary_fail {"POLICY_BOUNDARY_FAIL"}
+            else if codex_core {"BOUNDED_CODEX_POLICY_ACCEPTANCE"} else {"INCONCLUSIVE"});
+        summary["boundedCoreAcceptance"]=serde_json::json!(codex_core);
+        summary["codexPolicyAcceptance"]=serde_json::json!(codex_core);
+        summary["absoluteWorkspaceWriteAcceptance"]=serde_json::json!(false);
+        summary["knownExceptions"]=serde_json::json!(known_exceptions);
+        summary["codexFixtureReceipt"]=serde_json::json!(codex_fixtures.borrow().clone());
+        summary["tokenProfile"]=serde_json::json!("unchanged original pinned Codex WRITE_RESTRICTED: capability + account + actual helper Logon SID + Everyone");
+        summary["networkProvenance"]=serde_json::json!("Pi-owned enhancement: existing fourteen WFP filters, including two dedicated-account ALE_AUTH_CONNECT blocks; not claimed as upstream Codex token behavior");
+        summary["boundedCoreAcceptanceDefinition"]=serde_json::json!([
+            "exact five fixed cases: ordinary Everyone-Modify control, original Codex boundary, file operations, child normal exit, child timeout",
+            "work read/create/modify and disposable file/directory rename/delete; explicit deny-read/write; private outside write denied with separate owner write/read baseline",
+            "late capability-denied file and empty directory resist write/rename/delete without retained target handles; host independently verifies remaining artifacts",
+            "Everyone-Modify outside write is preserved as a known exception and never an absolute workspace-only pass",
+            "root/child actual token image exact Job and retained-handle cleanup; fixed live-control TCP4/TCP6 only",
+            "desktop unavailable and parent death excluded; observed desktop mismatch fails; fullPass/nativeValidated remain false"]);
+    }
     fresh_write(&path(r"trusted\python-isolation-run.json"),&serde_json::to_vec_pretty(&summary)?)?;
     Ok(summary)
 }

@@ -6,7 +6,7 @@ const SPECS: &str = include_str!("../src/network/wfp/filter_specs.rs");
 const WFP: &str = include_str!("../src/network/wfp.rs");
 const NETWORK: &str = include_str!("../src/network.rs");
 const SETUP: &str = include_str!("../src/setup.rs");
-const FEATURE: &str = "#[cfg(feature = \"lab-python-policy-repair-comparison\")]";
+const FEATURE: &str = r#"#[cfg(any(feature = "lab-python-policy-repair-comparison", feature = "lab-python-codex-policy-acceptance"))]"#;
 
 struct Spec<'a> {
     body: &'a str,
@@ -151,7 +151,8 @@ fn metadata_is_read_only_and_failure_cannot_activate_the_account() {
     assert!(NETWORK.contains("wfp::expected_filter_count()"));
     assert!(WFP.contains("FILTER_SPECS.len()"));
     let metadata = between(NETWORK, "pub fn wfp_policy_provenance", "pub(crate) fn install_offline_protection");
-    assert!(metadata.contains("cfg!(feature = \"lab-python-policy-repair-comparison\")"));
+    assert!(metadata.contains("lab-python-policy-repair-comparison"));
+    assert!(metadata.contains("codex-policy-with-lab-owned-account-connect-block-v1"));
     assert!(metadata.contains("lab-owned-account-connect-block-v1"));
     assert!(metadata.contains("baseline-port-icmp-v1"));
     let provision = between(SETUP, "pub fn provision_offline_account", "/// Read-only broker logon seam");

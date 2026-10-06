@@ -105,7 +105,7 @@ class IsolationFixtureTests(unittest.TestCase):
                 fixture.main()
 
     def test_only_session_boundary_probes_authorized_fixed_logon_leaf(self):
-        for label in ("strict", "pinned", "candidate", "session"):
+        for label in ("strict", "pinned", "candidate", "session", "codex"):
             with self.subTest(label=label), \
                     patch.object(fixture.sys, "platform", "win32"), \
                     patch.object(fixture.sys, "version_info", (3, 12, 10)), \
@@ -122,6 +122,10 @@ class IsolationFixtureTests(unittest.TestCase):
                 self.assertEqual(len(logon_calls), int(label == "session"))
                 result = fixture.json.loads(output.call_args.args[0])
                 self.assertEqual("sessionGrantWrite" in result, label == "session")
+                self.assertEqual("privateOutsideWrite" in result, label == "codex")
+                if label == "codex":
+                    write.assert_any_call(fixture.ROOT / "fixtures" / "outside-private" / "codex-write.txt",
+                                          b"UNEXPECTED_PRIVATE_WRITE\n")
                 if label == "session":
                     self.assertEqual(logon_calls[0].args, (
                         fixture.ROOT / "fixtures" / "outside-logon" / "session-write.txt",
@@ -132,7 +136,8 @@ class IsolationFixtureTests(unittest.TestCase):
                 self.assertEqual(connect.call_count, 2)
 
     def test_session_child_keeps_fixed_child_and_no_filesystem_or_network_probes(self):
-        for mode in ("session-child-normal-exit", "session-child-timeout"):
+        for mode in ("session-child-normal-exit", "session-child-timeout",
+                     "codex-child-normal-exit", "codex-child-timeout"):
             with self.subTest(mode=mode), \
                     patch.object(fixture.sys, "platform", "win32"), \
                     patch.object(fixture.sys, "version_info", (3, 12, 10)), \
@@ -154,12 +159,75 @@ class IsolationFixtureTests(unittest.TestCase):
                 self.assertEqual(result["marker"], "CHILD_STARTED")
                 self.assertNotIn("sessionGrantWrite", result)
 
+    def test_fixed_mutation_probes_keep_allowed_and_protected_results_separate(self):
+        denied = PermissionError(fixture.errno.EACCES, "synthetic")
+        denied.winerror = 5
+        def mutation(path, *args):
+            if "protected" in path.name:
+                raise denied
+        def writing(path, *args):
+            if "codex-protected-dir" in path.parts:
+                raise denied
+        with patch.object(fixture, "write_new", side_effect=writing) as write, \
+                patch.object(fixture, "read_exact") as read, \
+                patch.object(fixture.pathlib.Path, "mkdir") as mkdir, \
+                patch.object(fixture.pathlib.Path, "open", side_effect=denied), \
+                patch.object(fixture.pathlib.Path, "rename", autospec=True, side_effect=mutation) as rename, \
+                patch.object(fixture.pathlib.Path, "unlink", autospec=True, side_effect=mutation) as unlink, \
+                patch.object(fixture.pathlib.Path, "rmdir", autospec=True, side_effect=mutation) as rmdir, \
+                patch.object(fixture, "connect", side_effect=AssertionError("network")):
+            results = fixture.file_operations()
+        self.assertEqual(len(results), 11)
+        for name, result in results.items():
+            expected = "SUCCESS" if name.startswith("allowed") or name == "protectedFileRead" else "PERMISSION_DENIED"
+            self.assertEqual(result["outcome"], expected, name)
+        self.assertEqual(rename.call_count, 4)
+        self.assertEqual(unlink.call_count, 2)
+        self.assertEqual(rmdir.call_count, 2)
+        unlink.assert_any_call(fixture.WORK / "codex-protected-file.txt")
+        rmdir.assert_any_call(fixture.WORK / "codex-protected-dir")
+        read.assert_called_once_with(fixture.WORK / "codex-protected-file.txt", b"CODEX_PROTECTED_FILE\n")
+        mkdir.assert_called_once()
+        self.assertEqual(write.call_count, 2)
+
+    def test_mutation_sharing_violations_do_not_become_permission_denials(self):
+        sharing = PermissionError(fixture.errno.EACCES, "synthetic")
+        sharing.winerror = 32
+        with patch.object(fixture, "write_new"), patch.object(fixture, "read_exact"), \
+                patch.object(fixture.pathlib.Path, "mkdir"), \
+                patch.object(fixture.pathlib.Path, "open", side_effect=sharing), \
+                patch.object(fixture.pathlib.Path, "rename", side_effect=sharing), \
+                patch.object(fixture.pathlib.Path, "unlink", side_effect=sharing), \
+                patch.object(fixture.pathlib.Path, "rmdir", side_effect=sharing):
+            results = fixture.file_operations()
+        for name in ["protectedFileWrite", "protectedFileRename", "protectedFileDelete",
+                     "protectedDirRename", "protectedDirDelete"]:
+            self.assertEqual(results[name]["outcome"], "INCONCLUSIVE")
+            self.assertEqual(results[name]["winerror"], 32)
+
+    def test_unexpected_rename_is_not_repaired_or_hidden_by_missing_delete_target(self):
+        missing = FileNotFoundError(fixture.errno.ENOENT, "synthetic")
+        missing.winerror = 2
+        with patch.object(fixture, "write_new"), patch.object(fixture, "read_exact"), \
+                patch.object(fixture.pathlib.Path, "mkdir"), patch.object(fixture.pathlib.Path, "open"), \
+                patch.object(fixture.os, "fsync"), \
+                patch.object(fixture.pathlib.Path, "rename") as rename, \
+                patch.object(fixture.pathlib.Path, "unlink", side_effect=missing), \
+                patch.object(fixture.pathlib.Path, "rmdir", side_effect=missing):
+            results = fixture.file_operations()
+        self.assertEqual(results["protectedFileRename"], {"outcome": "SUCCESS"})
+        self.assertEqual(results["protectedDirRename"], {"outcome": "SUCCESS"})
+        self.assertEqual(results["protectedFileDelete"]["outcome"], "INCONCLUSIVE")
+        self.assertEqual(results["protectedDirDelete"]["winerror"], 2)
+        self.assertEqual(rename.call_count, 4)  # no reverse rename / restoration
+
     def test_fixture_has_only_declared_modes_and_endpoints(self):
         self.assertEqual(fixture.MODES, frozenset(("ordinary-outside", "strict-boundary",
             "strict-child-normal-exit", "strict-child-timeout", "pinned-boundary",
             "pinned-child-normal-exit", "pinned-child-timeout", "candidate-boundary",
             "candidate-child-normal-exit", "candidate-child-timeout", "session-boundary",
-            "session-child-normal-exit", "session-child-timeout", "descendant-hold")))
+            "session-child-normal-exit", "session-child-timeout", "codex-boundary",
+            "codex-file-operations", "codex-child-normal-exit", "codex-child-timeout", "descendant-hold")))
         source = SOURCE.read_text()
         self.assertNotIn("getaddrinfo(", source)
         self.assertNotIn("gethostbyname(", source)

@@ -27,7 +27,7 @@
       "destination": "native/windows-sandbox/src/admission.rs",
       "upstream": [],
       "origin": "new product integration source",
-      "adapted_sha256": "96695cd13d54d4add094004d07d8b09a483ad2a229ebd0036969dd5eb2a7a3a0"
+      "adapted_sha256": "4d3743e20e179da7e77170879dedc4ce67cb1474d428360c2b739f0cc516518d"
     },
     {
       "destination": "native/windows-sandbox/src/broker.rs",
@@ -57,7 +57,7 @@
       "destination": "native/windows-sandbox/src/lib.rs",
       "upstream": [],
       "origin": "new product integration source",
-      "adapted_sha256": "3df62f7cfc9e136a81ff1fb47a911e120e76c8e78abd5727da2f7eeeeb1abc1c"
+      "adapted_sha256": "bf44b4e813617a768b89f3dfece23968377e814d0d1ff88e0b2426d719ccf742"
     },
     {
       "destination": "native/windows-sandbox/src/main.rs",
@@ -69,7 +69,7 @@
       "destination": "native/windows-sandbox/src/network.rs",
       "upstream": [],
       "origin": "new product integration source",
-      "adapted_sha256": "27ba07a2cfd7aca2f980217e9de956eeec14573a999177ff01066415c69fd775"
+      "adapted_sha256": "c215d5851cd4bf47800f104fc114b894ef9521779090fffe7dbd1a396e030bd4"
     },
     {
       "destination": "native/windows-sandbox/src/network/firewall.rs",
@@ -89,7 +89,7 @@
           "sha256": "82effcda9c951ad62d1f1b4afa9b4f0ad59b3d35d7c2feab53a9b6838dd93fc4"
         }
       ],
-      "adapted_sha256": "2001efdc85c42e3e3fa3384b78f436a2d800832c9a1e533cdef59dc5a789a159"
+      "adapted_sha256": "e2623e15b0dbaf3a32e6e42237806b0eb09c2aa2efc185491d11b97537cdad6a"
     },
     {
       "destination": "native/windows-sandbox/src/network/wfp/filter_specs.rs",
@@ -99,13 +99,13 @@
           "sha256": "11bef68565843485376f31dea62930d833c6b758ccc2a8613a8b1872a2a0e1f1"
         }
       ],
-      "adapted_sha256": "95e73a80ae211ceab6806d5bca1e814931f6c4d9607d6148d5bd294254842def"
+      "adapted_sha256": "aff2d04c94cf26417f5e78ef2f600f786b51cc8ce9904cf98da31340a8dba464"
     },
     {
       "destination": "native/windows-sandbox/src/policy_masks.rs",
       "upstream": [],
       "origin": "new product integration source",
-      "adapted_sha256": "bcd761adcf7c3529b1f244ac4589592fa412dedb8fd32557444bade3be1c69e8"
+      "adapted_sha256": "ee077e7ce24a070d2417d91d0f1244a4b51ce019f5ddba7c58a74561c3bc5191"
     },
     {
       "destination": "native/windows-sandbox/src/proc_thread_attr.rs",
@@ -295,13 +295,13 @@
       "destination": "native/windows-sandbox/src/python_isolation.rs",
       "upstream": [],
       "origin": "new default-off fixed Python acceptance laboratory source",
-      "adapted_sha256": "68ddbdbf91fc118f4e700401d2ac3e7e2e03e9187455400170fbdfbc98ffd830"
+      "adapted_sha256": "9554bd481a54f5ca5f3e99e6c4538c9f43e7717c0847bf943fc4c8ad47d496b6"
     },
     {
       "destination": "native/windows-sandbox/src/python_isolation/broker.rs",
       "upstream": [],
       "origin": "new default-off fixed Python acceptance laboratory source",
-      "adapted_sha256": "cfa4176eeff769bc2cdc452fcbdf1bc187c2db1c898244dbc1650b4ef9aa362c"
+      "adapted_sha256": "8f01fb2caa98dd04ba87482b7c3c0fa997b4750699efb56218a0ead556ed8c0a"
     },
     {
       "destination": "native/windows-sandbox/src/python_isolation/observer.rs",
@@ -313,7 +313,7 @@
       "destination": "native/windows-sandbox/src/admission_plan.rs",
       "upstream": [],
       "origin": "new portable admission ordering, deny postconditions and rollback control flow",
-      "adapted_sha256": "329ed3ea9dc38d7923deca1c49204c069e4f08f1c49bdf3b460fcf8993d3e794"
+      "adapted_sha256": "e06f19849c8fdb3f90c9a57f171730ac8a0755904304f9b44b479e5917af54c7"
     },
     {
       "destination": "native/windows-sandbox/src/python_isolation/token_candidate.rs",
@@ -326,6 +326,12 @@
       "upstream": [],
       "origin": "new default-off fixed synthetic current-logon SID grant comparison source",
       "adapted_sha256": "811beb3f9fb56cca8dde3b62af53481917216063f0ca9038ff48aa5162737416"
+    },
+    {
+      "destination": "native/windows-sandbox/src/python_isolation/codex_fixtures.rs",
+      "upstream": [],
+      "origin": "new default-off fixed Codex-policy synthetic file-operation fixture source",
+      "adapted_sha256": "22bda615d9afd86d327590b53b12f177cf2405dd7aefc9b990736ce14f0094d4"
     }
   ]
 }

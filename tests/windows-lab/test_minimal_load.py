@@ -153,15 +153,15 @@ class SourceContracts(unittest.TestCase):
         # Masks and original token constructors stay unchanged. WFP snapshots
         # include reviewed owned-account guards and default-off extra filters.
         expected = {
-            'src/admission.rs': '96695cd13d54d4add094004d07d8b09a483ad2a229ebd0036969dd5eb2a7a3a0',
+            'src/admission.rs': '4d3743e20e179da7e77170879dedc4ce67cb1474d428360c2b739f0cc516518d',
             'src/token.rs': '5cf5ec4c5b1d230130dd7809a0b2b6b1b12a44d9d6b46f975ae40e6dc29bf25f',
             'src/desktop.rs': 'c8a0922a34654a20260ba906dc90c4b12e0485a9aa84a7e12bc098f5a25c4a29',
             'src/acl.rs': 'f8097901f8c17cc45f3593eb6d4cbd46e967e0081fd6c89fb2bd943f4b33c402',
             'src/setup.rs': '0512c223efe10766d852e65007e1582587e6c6f4618b0fb233a38468557f6bed',
             'src/setup/accounts.rs': 'd5c80b98fa4aa53cf486157632cec736ada6e8a2971e8516f120b58ef7b08915',
-            'src/network.rs': '27ba07a2cfd7aca2f980217e9de956eeec14573a999177ff01066415c69fd775',
+            'src/network.rs': 'c215d5851cd4bf47800f104fc114b894ef9521779090fffe7dbd1a396e030bd4',
             'src/network/firewall.rs': 'c92c6c9f49708349d17e4bc473151dadd0f82dc5cd5d7ce6812702669ec5cf8c',
-            'src/network/wfp.rs': '2001efdc85c42e3e3fa3384b78f436a2d800832c9a1e533cdef59dc5a789a159',
+            'src/network/wfp.rs': 'e2623e15b0dbaf3a32e6e42237806b0eb09c2aa2efc185491d11b97537cdad6a',
         }
         for name, digest in expected.items():
             with self.subTest(name=name):

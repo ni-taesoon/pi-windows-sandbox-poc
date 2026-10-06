@@ -10,13 +10,22 @@ pub const PYTHON: &str = r"C:\PiSandboxLab\runtime\python.exe";
 pub const SCRIPT: &str = r"C:\PiSandboxLab\trusted\python-isolation-fixture.py";
 pub const WORK: &str = r"C:\PiSandboxLab\work";
 pub const OUTSIDE: &str = r"C:\PiSandboxLab\fixtures\outside-world";
+pub const OUTSIDE_PRIVATE: &str = r"C:\PiSandboxLab\fixtures\outside-private";
 pub const OUTSIDE_LOGON: &str = r"C:\PiSandboxLab\fixtures\outside-logon";
 pub const SESSION_OUTPUT: &[u8] = b"AUTHORIZED_SESSION_GRANT_OBSERVED\n";
 pub const OUTPUT: &[u8] = b"PYTHON_ISOLATION_OK\n";
 pub const MAX_FRAME: usize = 64 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum Case { OrdinaryOutside, StrictBoundary, StrictChildNormalExit, StrictChildTimeout,
+pub enum Case { OrdinaryOutside,
+    #[cfg(feature="lab-python-codex-policy-acceptance")]
+    CodexBoundary,
+    #[cfg(feature="lab-python-codex-policy-acceptance")]
+    CodexFileOperations,
+    #[cfg(feature="lab-python-codex-policy-acceptance")]
+    CodexChildNormalExit,
+    #[cfg(feature="lab-python-codex-policy-acceptance")]
+    CodexChildTimeout, StrictBoundary, StrictChildNormalExit, StrictChildTimeout,
     PinnedBoundary, PinnedChildNormalExit, PinnedChildTimeout,
     #[cfg(feature = "lab-python-policy-repair-comparison")]
     CandidateBoundary,
@@ -32,7 +41,28 @@ pub enum Case { OrdinaryOutside, StrictBoundary, StrictChildNormalExit, StrictCh
     SessionChildTimeout,
 }
 impl Case {
-    #[cfg(not(feature = "lab-python-policy-repair-comparison"))]
+    #[cfg(feature="lab-python-codex-policy-acceptance")]
+    pub const ALL: [Self;5] = [Self::OrdinaryOutside,Self::CodexBoundary,Self::CodexFileOperations,
+        Self::CodexChildNormalExit,Self::CodexChildTimeout];
+    pub fn initial() -> Self {
+        #[cfg(feature="lab-python-codex-policy-acceptance")]
+        { Self::CodexBoundary }
+        #[cfg(not(feature="lab-python-codex-policy-acceptance"))]
+        { Self::StrictBoundary }
+    }
+    pub fn codex(self) -> bool {
+        #[cfg(feature="lab-python-codex-policy-acceptance")]
+        { matches!(self,Self::CodexBoundary|Self::CodexFileOperations|Self::CodexChildNormalExit|Self::CodexChildTimeout) }
+        #[cfg(not(feature="lab-python-codex-policy-acceptance"))]
+        { false }
+    }
+    pub fn file_operations(self) -> bool {
+        #[cfg(feature="lab-python-codex-policy-acceptance")]
+        { self == Self::CodexFileOperations }
+        #[cfg(not(feature="lab-python-codex-policy-acceptance"))]
+        { false }
+    }
+    #[cfg(all(not(feature = "lab-python-policy-repair-comparison"),not(feature="lab-python-codex-policy-acceptance")))]
     pub const ALL: [Self; 7] = [Self::OrdinaryOutside, Self::StrictBoundary,
         Self::StrictChildNormalExit, Self::StrictChildTimeout, Self::PinnedBoundary,
         Self::PinnedChildNormalExit, Self::PinnedChildTimeout];
@@ -47,6 +77,14 @@ impl Case {
         Self::CandidateBoundary,Self::CandidateChildNormalExit,Self::CandidateChildTimeout,
         Self::SessionBoundary,Self::SessionChildNormalExit,Self::SessionChildTimeout];
     pub fn name(self) -> &'static str { match self {
+        #[cfg(feature="lab-python-codex-policy-acceptance")]
+        Self::CodexBoundary => "codex-boundary",
+        #[cfg(feature="lab-python-codex-policy-acceptance")]
+        Self::CodexFileOperations => "codex-file-operations",
+        #[cfg(feature="lab-python-codex-policy-acceptance")]
+        Self::CodexChildNormalExit => "codex-child-normal-exit",
+        #[cfg(feature="lab-python-codex-policy-acceptance")]
+        Self::CodexChildTimeout => "codex-child-timeout",
         Self::OrdinaryOutside => "ordinary-outside", Self::StrictBoundary => "strict-boundary",
         Self::StrictChildNormalExit => "strict-child-normal-exit", Self::StrictChildTimeout => "strict-child-timeout",
         Self::PinnedBoundary => "pinned-boundary", Self::PinnedChildNormalExit => "pinned-child-normal-exit",
@@ -78,6 +116,8 @@ impl Case {
         { false }
     }
     pub fn boundary(self) -> bool { match self {
+        #[cfg(feature="lab-python-codex-policy-acceptance")]
+        Self::CodexBoundary => true,
         Self::StrictBoundary | Self::PinnedBoundary => true,
         #[cfg(feature = "lab-python-policy-repair-comparison")]
         Self::CandidateBoundary => true,
@@ -85,8 +125,10 @@ impl Case {
         Self::SessionBoundary => true,
         _ => false,
     } }
-    pub fn descendant(self) -> bool { !self.boundary() && self != Self::OrdinaryOutside }
+    pub fn descendant(self) -> bool { !self.boundary() && !self.file_operations() && self != Self::OrdinaryOutside }
     pub fn timeout(self) -> bool { match self {
+        #[cfg(feature="lab-python-codex-policy-acceptance")]
+        Self::CodexChildTimeout => true,
         Self::StrictChildTimeout | Self::PinnedChildTimeout => true,
         #[cfg(feature = "lab-python-policy-repair-comparison")]
         Self::CandidateChildTimeout => true,
@@ -94,10 +136,11 @@ impl Case {
         Self::SessionChildTimeout => true,
         _ => false,
     } }
-    pub fn label(self) -> &'static str { if self.session() { "session" } else if self.candidate() { "candidate" } else if self.pinned() { "pinned" } else if self == Self::OrdinaryOutside { "ordinary" } else { "strict" } }
+    pub fn label(self) -> &'static str { if self.codex() { "codex" } else if self.session() { "session" } else if self.candidate() { "candidate" } else if self.pinned() { "pinned" } else if self == Self::OrdinaryOutside { "ordinary" } else { "strict" } }
 }
 pub fn compiled_feature() -> &'static str {
-    if cfg!(feature="lab-python-logon-sid-comparison") { "lab-python-logon-sid-comparison" }
+    if cfg!(feature="lab-python-codex-policy-acceptance") { "lab-python-codex-policy-acceptance" }
+    else if cfg!(feature="lab-python-logon-sid-comparison") { "lab-python-logon-sid-comparison" }
     else if cfg!(feature="lab-python-policy-repair-comparison") { "lab-python-policy-repair-comparison" }
     else { "lab-python-isolation-acceptance" }
 }
@@ -144,6 +187,25 @@ pub struct VerifiedSessionIdentity {pub(crate) account_sid:String,pub(crate) log
 impl VerifiedSessionIdentity {
     pub fn account_sid(&self)->&str {&self.account_sid}
     pub fn logon_sid(&self)->&str {&self.logon_sid}
+}
+/// Opaque owner-side proof constructed only after authenticated helper admission.
+#[cfg(feature="lab-python-codex-policy-acceptance")]
+pub struct VerifiedCodexIdentity {
+    pub(crate) owner_sid:String, pub(crate) account_sid:String,
+    pub(crate) capability_sid:String, pub(crate) actual_logon_sid:String,
+}
+#[derive(Debug,Clone,Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub struct CodexTokenConfiguration {
+    pub profile:String,pub actual_logon_sid:String,pub restricting_sids:Vec<String>,
+}
+impl CodexTokenConfiguration {
+    pub fn matches(&self,account:&str,capability:&str)->bool {
+        let mut expected=vec![account.to_owned(),capability.to_owned(),"S-1-1-0".into(),self.actual_logon_sid.clone()];
+        expected.sort();let mut actual=self.restricting_sids.clone();actual.sort();
+        self.profile=="ORIGINAL_PINNED_CODEX_WRITE_RESTRICTED_V1" && self.actual_logon_sid.starts_with("S-1-5-5-")
+            && account!=capability && actual==expected
+    }
 }
 pub fn fixed_policy() -> Policy { Policy { workspace: WORK.into(), writable_roots: vec![WORK.into()],
     deny_read: vec![format!(r"{WORK}\denied-read")], deny_write: vec![format!(r"{WORK}\denied-write")], network: "disabled".into() } }
@@ -244,6 +306,8 @@ pub struct Frame {
     pub candidate_token: Option<CandidateTokenConfiguration>,
     #[serde(default,skip_serializing_if="Option::is_none")]
     pub session_token: Option<SessionTokenConfiguration>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub codex_token: Option<CodexTokenConfiguration>,
 }
 impl Frame {
     pub fn cleanup_verified(&self) -> bool {
@@ -271,10 +335,36 @@ impl Probe {
     pub fn file_denial(&self) -> bool {
         matches!(self, Self::PermissionDenied {winerror:Some(5),..}) || self.errno_permission()
     }
+    /// Sharing violations and missing targets never prove a destructive denial.
+    pub fn mutation_denial(&self) -> bool {
+        matches!(self,Self::PermissionDenied {winerror:Some(5),..})
+            || matches!(self,Self::PermissionDenied {winerror:None,errno:Some(13),error_type:Some(kind)} if kind=="PermissionError")
+    }
     pub fn socket_denial(&self) -> bool {
         matches!(self, Self::PermissionDenied {winerror:Some(10013),..}) || self.errno_permission()
     }
     pub fn explicit_denial(&self) -> bool { self.file_denial() || self.socket_denial() }
+}
+#[derive(Debug,Clone,Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub struct FileOperations {
+    pub allowed_file_rename:Probe,pub allowed_file_delete:Probe,
+    pub allowed_dir_rename:Probe,pub allowed_dir_delete:Probe,
+    pub protected_file_read:Probe,pub protected_file_write:Probe,
+    pub protected_file_rename:Probe,pub protected_file_delete:Probe,
+    pub protected_dir_write:Probe,pub protected_dir_rename:Probe,pub protected_dir_delete:Probe,
+}
+impl FileOperations {
+    pub fn allowed(&self)->[&Probe;5] { [&self.allowed_file_rename,&self.allowed_file_delete,
+        &self.allowed_dir_rename,&self.allowed_dir_delete,&self.protected_file_read] }
+    pub fn denied(&self)->[&Probe;6] { [&self.protected_file_write,&self.protected_file_rename,
+        &self.protected_file_delete,&self.protected_dir_write,&self.protected_dir_rename,&self.protected_dir_delete] }
+    pub fn verdict(&self)->Verdict {
+        if self.denied().iter().any(|p|matches!(p,Probe::Success)) { Verdict::PolicyBoundaryFail }
+        else if self.allowed().iter().all(|p|matches!(p,Probe::Success))
+            && self.denied().iter().all(|p|p.mutation_denial()) { Verdict::ObservedPass }
+        else { Verdict::Inconclusive }
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -286,6 +376,10 @@ pub struct ScriptEvidence {
     pub tcp4: Option<Probe>, pub tcp6: Option<Probe>,
     #[serde(default,skip_serializing_if="Option::is_none")]
     pub session_grant_write: Option<Probe>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub private_outside_write: Option<Probe>,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub file_operations: Option<FileOperations>,
 }
 pub fn parse_script(frame: &Frame) -> Result<ScriptEvidence> {
     let run = frame.run.as_ref().ok_or_else(|| anyhow::anyhow!("process result missing"))?;
@@ -310,7 +404,10 @@ pub fn parse_script(frame: &Frame) -> Result<ScriptEvidence> {
     }
     if frame.case.session() && frame.case.boundary() { ensure!(result.session_grant_write.is_some(),"session grant probe missing"); }
     else { ensure!(result.session_grant_write.is_none(),"session grant probe outside fixed session boundary"); }
-    if frame.case.descendant() {
+    if frame.case.codex() && frame.case.boundary() { ensure!(result.private_outside_write.is_some(),"private outside write probe missing"); }
+    else { ensure!(result.private_outside_write.is_none(),"private outside probe outside fixed Codex boundary"); }
+    ensure!(result.file_operations.is_some()==frame.case.file_operations(),"file operations outside fixed case or missing");
+    if frame.case.descendant() || frame.case.file_operations() {
         ensure!(result.input_ok.is_none() && result.output_ok.is_none() && result.outside_read.is_none()
             && result.outside_write.is_none() && result.denied_read.is_none() && result.denied_write.is_none()
             && result.tcp4.is_none() && result.tcp6.is_none(), "descendant case exceeded fixed scope");
@@ -319,6 +416,11 @@ pub fn parse_script(frame: &Frame) -> Result<ScriptEvidence> {
 }
 pub fn native_valid(frame: &Frame) -> bool {
     let expected_restrictors = if frame.case == Case::OrdinaryOutside { Vec::new() }
+        else if frame.case.codex() {
+            let Some(config)=&frame.codex_token else { return false };
+            if !config.matches(&frame.account_sid,&frame.capability_sid) {return false;}
+            vec![frame.capability_sid.as_str(),frame.account_sid.as_str(),"S-1-1-0",config.actual_logon_sid.as_str()]
+        }
         else if frame.case.session() {
             let Some(session)=&frame.session_token else { return false };
             if !session.matches_capability(&frame.capability_sid) {return false;}
@@ -334,7 +436,7 @@ pub fn native_valid(frame: &Frame) -> bool {
         && expected_restrictors.iter().all(|s| e.restricting_sids.iter().any(|x| x == s))
         && if frame.case == Case::OrdinaryOutside { e.restricting_sids.is_empty() }
             else if frame.case.session() { e.restricting_sids.len() == 2 }
-            else if frame.case.pinned() { e.restricting_sids.len() == 4 }
+            else if frame.case.pinned() || frame.case.codex() { e.restricting_sids.len() == 4 }
             else { e.restricting_sids.len() == 1 };
     (!frame.case.candidate() || frame.candidate_token.as_ref().is_some_and(|c|c.matches_capability(&frame.capability_sid)))
         && frame.native.error.is_none() && frame.cleanup_verified() && frame.native.root.as_ref().is_some_and(valid)
@@ -362,11 +464,12 @@ pub fn desktop_verdict(frame: &Frame) -> Verdict {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum Verdict { ObservedPass, PolicyBoundaryFail, Inconclusive, NotTested, AuthorizedSessionGrantObserved }
+pub enum Verdict { KnownExceptionObserved, ObservedPass, PolicyBoundaryFail, Inconclusive, NotTested, AuthorizedSessionGrantObserved }
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Assessment { pub python_success: bool, pub identity: Verdict, pub desktop: Verdict, pub outside_write: Verdict,
     pub outside_read: Option<Probe>, pub broad_read_truth: Verdict, pub explicit_denies: Verdict, pub loopback_only: Verdict,
+    pub private_outside_write: Verdict, pub file_operations: Verdict,
     pub descendant_cleanup: Verdict, pub parent_death: Verdict, pub full_pass: bool, pub session_grant: Verdict }
 pub fn assess(frame: &Frame, output_bytes_match: bool, ordinary_outside_write_succeeded: bool,
     live_owner_controls: bool) -> Assessment {
@@ -374,6 +477,7 @@ pub fn assess(frame: &Frame, output_bytes_match: bool, ordinary_outside_write_su
     let valid_native = native_valid(frame);
     let boundary = script.as_ref().filter(|_| frame.case.boundary());
     let outside_write = match boundary.and_then(|s| s.outside_write.as_ref()) {
+        Some(Probe::Success) if frame.case.codex() => Verdict::KnownExceptionObserved,
         Some(Probe::Success) => Verdict::PolicyBoundaryFail,
         Some(p) if p.file_denial() && ordinary_outside_write_succeeded => Verdict::ObservedPass,
         _ => Verdict::Inconclusive };
@@ -387,6 +491,14 @@ pub fn assess(frame: &Frame, output_bytes_match: bool, ordinary_outside_write_su
         explicit_denies: if boundary.is_some_and(|s| file_deny(s.denied_read.as_ref()) && file_deny(s.denied_write.as_ref())) { Verdict::ObservedPass } else if boundary.is_some_and(|s| matches!(s.denied_read, Some(Probe::Success)) || matches!(s.denied_write, Some(Probe::Success))) { Verdict::PolicyBoundaryFail } else { Verdict::Inconclusive },
         loopback_only: if live_owner_controls && boundary.is_some_and(|s| socket_deny(s.tcp4.as_ref()) && socket_deny(s.tcp6.as_ref())) { Verdict::ObservedPass }
             else if boundary.is_some_and(|s| matches!(s.tcp4, Some(Probe::Success)) || matches!(s.tcp6, Some(Probe::Success))) { Verdict::PolicyBoundaryFail } else { Verdict::Inconclusive },
+        private_outside_write: if frame.case.codex() && frame.case.boundary() {
+            match boundary.and_then(|s|s.private_outside_write.as_ref()) {
+                Some(Probe::Success)=>Verdict::PolicyBoundaryFail,
+                Some(p) if p.file_denial()=>Verdict::ObservedPass,_=>Verdict::Inconclusive,
+            }
+        } else {Verdict::NotTested},
+        file_operations: if frame.case.file_operations() {script.as_ref().and_then(|s|s.file_operations.as_ref())
+            .map_or(Verdict::Inconclusive,FileOperations::verdict)} else {Verdict::NotTested},
         descendant_cleanup: if frame.case.descendant() { if script.is_some() && valid_native { Verdict::ObservedPass } else { Verdict::Inconclusive } } else { Verdict::NotTested },
         parent_death: Verdict::NotTested, full_pass: false,
         session_grant:if frame.case.session() && frame.case.boundary(){Verdict::Inconclusive}else{Verdict::NotTested} }
@@ -436,7 +548,8 @@ pub fn session_profile_acceptance(assessments:&[(Case,Assessment)],ordinary_ok:b
 pub fn any_policy_boundary_failure(assessments: &[(Case,Assessment)]) -> bool {
     assessments.iter().any(|(_,a)|a.outside_write == Verdict::PolicyBoundaryFail
         || a.explicit_denies == Verdict::PolicyBoundaryFail || a.loopback_only == Verdict::PolicyBoundaryFail
-        || a.desktop == Verdict::PolicyBoundaryFail)
+        || a.desktop == Verdict::PolicyBoundaryFail || a.private_outside_write == Verdict::PolicyBoundaryFail
+        || a.file_operations == Verdict::PolicyBoundaryFail)
 }
 #[cfg(all(windows,feature="lab-python-logon-sid-comparison"))]
 #[path="python_isolation/session_grant.rs"]
@@ -444,3 +557,22 @@ pub mod session_grant;
 #[cfg(windows)]
 #[path = "python_isolation/observer.rs"]
 pub(crate) mod observer;
+
+/// This fixed profile records the Everyone-Modify exception without rewriting
+/// historical comparisons or claiming an absolute workspace-only write boundary.
+pub fn codex_policy_acceptance(assessments:&[(Case,Assessment)],ordinary_ok:bool,suite_complete:bool,
+    fixtures_verified:bool)->bool {
+    cfg!(feature="lab-python-codex-policy-acceptance") && ordinary_ok && suite_complete && fixtures_verified
+        && assessments.len()==Case::ALL.len() && assessments.iter().map(|(c,_)|*c).eq(Case::ALL)
+        && !any_policy_boundary_failure(assessments)
+        && assessments.iter().filter(|(c,_)|c.codex()).all(|(case,a)|a.python_success && a.identity==Verdict::ObservedPass
+            && a.desktop!=Verdict::PolicyBoundaryFail && if case.boundary() {
+                matches!(a.outside_write,Verdict::KnownExceptionObserved|Verdict::ObservedPass)
+                && a.broad_read_truth==Verdict::ObservedPass && a.explicit_denies==Verdict::ObservedPass
+                && a.private_outside_write==Verdict::ObservedPass && a.loopback_only==Verdict::ObservedPass
+            } else if case.file_operations() {a.file_operations==Verdict::ObservedPass}
+            else {a.descendant_cleanup==Verdict::ObservedPass})
+}
+#[cfg(all(windows,feature="lab-python-codex-policy-acceptance"))]
+#[path="python_isolation/codex_fixtures.rs"]
+pub mod codex_fixtures;
