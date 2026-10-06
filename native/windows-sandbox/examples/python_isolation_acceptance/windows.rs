@@ -333,6 +333,10 @@ fn run_suite(owner: &str, digest: &BTreeMap<String,String>, pins: &mut Vec<File>
     let mut ignored = BTreeMap::new(); pin_file(&path(r"trusted\python-isolation-baseline.json"),pins,&mut ignored)?;
     let baseline: serde_json::Value = serde_json::from_slice(&std::fs::read(path(r"trusted\python-isolation-baseline.json"))?)?;
     let policy_hash = hash(&serde_json::to_vec(&lab::fixed_policy())?)?;
+    ensure!(baseline["labFeature"] == lab::compiled_feature()
+        && baseline["wfpPolicy"] == network::wfp_policy_provenance()
+        && baseline["expectedWfpFilterCount"] == serde_json::json!(network::expected_wfp_filter_count()),
+        "baseline compiled lab/network provenance mismatch");
     ensure!(baseline["ownerSid"] == owner && baseline["inputs"] == serde_json::to_value(digest)?
         && baseline["policyHash"] == policy_hash,"baseline owner/inputs/policy mismatch");
     verify_fixture()?;
@@ -366,6 +370,8 @@ fn run_suite(owner: &str, digest: &BTreeMap<String,String>, pins: &mut Vec<File>
             assessment.loopback_only = Verdict::PolicyBoundaryFail;
         }
         let record = serde_json::json!({"schemaVersion":1,"scope":"LAB_PYTHON_ISOLATION_ACCEPTANCE", "nativeValidated":false,
+            "labFeature":lab::compiled_feature(),"wfpPolicy":network::wfp_policy_provenance(),
+            "expectedWfpFilterCount":network::expected_wfp_filter_count(),
             "frame":frame,"script":lab::parse_script(frame).ok(),"scriptError":lab::parse_script(frame).err().map(|e|format!("{e:#}")),
             "assessment":assessment,"loopbackBefore":before,"loopbackAfter":after,
             "fixedTargetDacls":fixed_target_dacls(owner,&frame.account_sid,Some(&frame.capability_sid)),
@@ -376,18 +382,29 @@ fn run_suite(owner: &str, digest: &BTreeMap<String,String>, pins: &mut Vec<File>
         frames.push(record); assessments.push((frame.case,assessment)); before = after;
         Ok(())
     }) };
-    let boundary_fail = assessments.iter().any(|(_,a)| a.outside_write == Verdict::PolicyBoundaryFail
-        || a.explicit_denies == Verdict::PolicyBoundaryFail || a.loopback_only == Verdict::PolicyBoundaryFail
-        || a.desktop == Verdict::PolicyBoundaryFail);
+    let boundary_fail = lab::any_policy_boundary_failure(&assessments);
     let core = !boundary_fail && ordinary_ok && run.is_ok() && assessments.iter().filter(|(c,_)| c.pinned()).count() == 3
         && assessments.iter().filter(|(c,_)| c.pinned()).all(|(c,a)| a.python_success && a.identity == Verdict::ObservedPass
             && if c.boundary() { a.outside_write == Verdict::ObservedPass && a.broad_read_truth == Verdict::ObservedPass
                 && a.explicit_denies == Verdict::ObservedPass && a.loopback_only == Verdict::ObservedPass }
                 else { a.descendant_cleanup == Verdict::ObservedPass });
+    let candidate=lab::candidate_acceptance(&assessments,ordinary_ok,run.is_ok());
+    let candidate_core=candidate.bounded_core_acceptance;
     let summary = serde_json::json!({"schemaVersion":1,"scope":"LAB_PYTHON_ISOLATION_ACCEPTANCE","nativeValidated":false,
         "normalValidationEligible":false,"pythonValidationEligible":false,"fullPass":false,
-        "status":if boundary_fail {"POLICY_BOUNDARY_FAIL"} else if core {"BOUNDED_OBSERVATIONS_RECORDED"} else {"INCONCLUSIVE"},
-        "boundedCoreAcceptance":core,
+        "labFeature":lab::compiled_feature(),"wfpPolicy":network::wfp_policy_provenance(),
+        "expectedWfpFilterCount":network::expected_wfp_filter_count(),
+        "comparisonCompleted":run.is_ok() && assessments.len() == Case::ALL.len(),
+        "candidateAttemptStatus":if !cfg!(feature="lab-python-policy-repair-comparison") {"NOT_ENABLED"}
+            else if candidate.recorded == 0 {"NOT_ATTEMPTED"} else if candidate.recorded == 3 {"RECORDED"} else {"INCOMPLETE"},
+        "candidatePythonSuccess":candidate.python_success,"candidateIdentityAcceptance":candidate.identity_acceptance,
+        "candidateFilesystemAcceptance":candidate.filesystem_acceptance,"candidateLoopbackAcceptance":candidate.loopback_acceptance,
+        "candidateCleanupAcceptance":candidate.cleanup_acceptance,"candidateBoundedCoreAcceptance":candidate_core,
+        "candidateAcceptanceDefinition":"candidate-only results never override a failed control or the overall comparison verdict; desktop unavailable and parent-death remain outside bounded core",
+        "candidateTokenReadbackScope":"helper candidate token queried before CreateProcessAsUserW; Python root/child restricting SIDs are independently queried by the native observer",
+        "composedRepairScope":"when enabled, the two dedicated-account WFP connect filters apply to every control and candidate; only the candidate changes strict default-object DACL, keeping capability-only restrictors",
+        "status":if boundary_fail {"POLICY_BOUNDARY_FAIL"} else if core && (!cfg!(feature="lab-python-policy-repair-comparison") || candidate_core) {"BOUNDED_OBSERVATIONS_RECORDED"} else {"INCONCLUSIVE"},
+        "boundedCoreAcceptance":core && (!cfg!(feature="lab-python-policy-repair-comparison") || candidate_core),
         "boundedCoreAcceptanceDefinition":["Python root and fixed child token/image/exact-Job identity plus retained-handle cleanup",
             "at most one same-account exact System32 conhost in that Job; its restricting SIDs are reported separately",
             "positive Python files, outside-write denial, explicit denies and live-control loopback denials",
@@ -418,6 +435,8 @@ fn setup_lab(owner: &str) -> Result<()> {
         network::verify_offline_protection(identity.sid())?;
         fresh_write(&path(r"trusted\python-isolation-baseline.json"),&serde_json::to_vec_pretty(&serde_json::json!({
             "ownerSid":owner,"accountSid":identity.sid(),"inputs":digest,
+            "labFeature":lab::compiled_feature(),"wfpPolicy":network::wfp_policy_provenance(),
+            "expectedWfpFilterCount":network::expected_wfp_filter_count(),
             "fixedTargetDacls":fixed_target_dacls(owner,identity.sid(),None),
             "policyHash":hash(&serde_json::to_vec(&lab::fixed_policy())?)?,"nativeValidated":false}))?)
     })();

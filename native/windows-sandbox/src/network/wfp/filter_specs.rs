@@ -126,4 +126,22 @@ pub(super) const FILTER_SPECS: &[FilterSpec] = &[
         layer_key: FWPM_LAYER_ALE_AUTH_CONNECT_V6,
         conditions: &[ConditionSpec::User, ConditionSpec::RemotePort(139)],
     },
+    // Disposable-lab comparison only. A required ALE_USER_ID condition scopes
+    // all outbound connects (including loopback) to the owned local account.
+    #[cfg(feature = "lab-python-policy-repair-comparison")]
+    FilterSpec {
+        key: GUID::from_u128(0xef7656ccacb451bcb3ad27be82cb009a),
+        name: "pi_sandbox_wfp_offline_connect_v4",
+        description: "Block sandbox-account outbound connect v4 (lab comparison)",
+        layer_key: FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+        conditions: &[ConditionSpec::User],
+    },
+    #[cfg(feature = "lab-python-policy-repair-comparison")]
+    FilterSpec {
+        key: GUID::from_u128(0x3d9c33a833525ce2af92d71c8f66eb26),
+        name: "pi_sandbox_wfp_offline_connect_v6",
+        description: "Block sandbox-account outbound connect v6 (lab comparison)",
+        layer_key: FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+        conditions: &[ConditionSpec::User],
+    },
 ];

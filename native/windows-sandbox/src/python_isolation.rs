@@ -15,21 +15,81 @@ pub const MAX_FRAME: usize = 64 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Case { OrdinaryOutside, StrictBoundary, StrictChildNormalExit, StrictChildTimeout,
-    PinnedBoundary, PinnedChildNormalExit, PinnedChildTimeout }
+    PinnedBoundary, PinnedChildNormalExit, PinnedChildTimeout,
+    #[cfg(feature = "lab-python-policy-repair-comparison")]
+    CandidateBoundary,
+    #[cfg(feature = "lab-python-policy-repair-comparison")]
+    CandidateChildNormalExit,
+    #[cfg(feature = "lab-python-policy-repair-comparison")]
+    CandidateChildTimeout,
+}
 impl Case {
+    #[cfg(not(feature = "lab-python-policy-repair-comparison"))]
     pub const ALL: [Self; 7] = [Self::OrdinaryOutside, Self::StrictBoundary,
         Self::StrictChildNormalExit, Self::StrictChildTimeout, Self::PinnedBoundary,
         Self::PinnedChildNormalExit, Self::PinnedChildTimeout];
+    #[cfg(feature = "lab-python-policy-repair-comparison")]
+    pub const ALL: [Self; 10] = [Self::OrdinaryOutside, Self::StrictBoundary,
+        Self::StrictChildNormalExit, Self::StrictChildTimeout, Self::PinnedBoundary,
+        Self::PinnedChildNormalExit, Self::PinnedChildTimeout, Self::CandidateBoundary,
+        Self::CandidateChildNormalExit, Self::CandidateChildTimeout];
     pub fn name(self) -> &'static str { match self {
         Self::OrdinaryOutside => "ordinary-outside", Self::StrictBoundary => "strict-boundary",
         Self::StrictChildNormalExit => "strict-child-normal-exit", Self::StrictChildTimeout => "strict-child-timeout",
         Self::PinnedBoundary => "pinned-boundary", Self::PinnedChildNormalExit => "pinned-child-normal-exit",
-        Self::PinnedChildTimeout => "pinned-child-timeout" } }
+        Self::PinnedChildTimeout => "pinned-child-timeout",
+        #[cfg(feature = "lab-python-policy-repair-comparison")]
+        Self::CandidateBoundary => "candidate-boundary",
+        #[cfg(feature = "lab-python-policy-repair-comparison")]
+        Self::CandidateChildNormalExit => "candidate-child-normal-exit",
+        #[cfg(feature = "lab-python-policy-repair-comparison")]
+        Self::CandidateChildTimeout => "candidate-child-timeout",
+    } }
     pub fn pinned(self) -> bool { matches!(self, Self::PinnedBoundary | Self::PinnedChildNormalExit | Self::PinnedChildTimeout) }
-    pub fn boundary(self) -> bool { matches!(self, Self::StrictBoundary | Self::PinnedBoundary) }
+    pub fn candidate(self) -> bool {
+        #[cfg(feature = "lab-python-policy-repair-comparison")]
+        { matches!(self,Self::CandidateBoundary | Self::CandidateChildNormalExit | Self::CandidateChildTimeout) }
+        #[cfg(not(feature = "lab-python-policy-repair-comparison"))]
+        { false }
+    }
+    pub fn boundary(self) -> bool { match self {
+        Self::StrictBoundary | Self::PinnedBoundary => true,
+        #[cfg(feature = "lab-python-policy-repair-comparison")]
+        Self::CandidateBoundary => true,
+        _ => false,
+    } }
     pub fn descendant(self) -> bool { !self.boundary() && self != Self::OrdinaryOutside }
-    pub fn timeout(self) -> bool { matches!(self, Self::StrictChildTimeout | Self::PinnedChildTimeout) }
-    pub fn label(self) -> &'static str { if self.pinned() { "pinned" } else if self == Self::OrdinaryOutside { "ordinary" } else { "strict" } }
+    pub fn timeout(self) -> bool { match self {
+        Self::StrictChildTimeout | Self::PinnedChildTimeout => true,
+        #[cfg(feature = "lab-python-policy-repair-comparison")]
+        Self::CandidateChildTimeout => true,
+        _ => false,
+    } }
+    pub fn label(self) -> &'static str { if self.candidate() { "candidate" } else if self.pinned() { "pinned" } else if self == Self::OrdinaryOutside { "ordinary" } else { "strict" } }
+}
+pub fn compiled_feature() -> &'static str {
+    if cfg!(feature="lab-python-policy-repair-comparison") { "lab-python-policy-repair-comparison" }
+    else { "lab-python-isolation-acceptance" }
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all="SCREAMING_SNAKE_CASE")]
+pub enum DefaultDaclRole { Logon, OwnerRights }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub struct DefaultDaclAce { pub role: DefaultDaclRole, pub mask: u32, pub flags: u8 }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub struct CandidateTokenConfiguration {
+    pub profile: String, pub restricting_sids: Vec<String>, pub default_dacl_aces: Vec<DefaultDaclAce>,
+}
+impl CandidateTokenConfiguration {
+    pub fn matches_capability(&self,capability: &str) -> bool {
+        self.profile == "CAP_ONLY_UPSTREAM_DEFAULT_DACL_V1"
+            && self.restricting_sids.len() == 1 && self.restricting_sids[0] == capability
+            && self.default_dacl_aces.len() == 2
+            && self.default_dacl_aces.iter().filter(|a|a.role == DefaultDaclRole::Logon && a.mask == 0x10000000 && a.flags == 0).count() == 1
+            && self.default_dacl_aces.iter().filter(|a|a.role == DefaultDaclRole::OwnerRights && a.mask == 0x00020000 && a.flags == 0).count() == 1
+    }
 }
 pub fn fixed_policy() -> Policy { Policy { workspace: WORK.into(), writable_roots: vec![WORK.into()],
     deny_read: vec![format!(r"{WORK}\denied-read")], deny_write: vec![format!(r"{WORK}\denied-write")], network: "disabled".into() } }
@@ -126,6 +186,8 @@ pub struct NativeEvidence {
 pub struct Frame {
     pub case: Case, pub account_sid: String, pub capability_sid: String, pub private_desktop: String,
     pub run: Option<RunResult>, pub launch_error: Option<String>, pub native: NativeEvidence,
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub candidate_token: Option<CandidateTokenConfiguration>,
 }
 impl Frame {
     pub fn cleanup_verified(&self) -> bool {
@@ -208,7 +270,8 @@ pub fn native_valid(frame: &Frame) -> bool {
         && if frame.case == Case::OrdinaryOutside { e.restricting_sids.is_empty() }
             else if frame.case.pinned() { e.restricting_sids.len() == 4 }
             else { e.restricting_sids.len() == 1 };
-    frame.native.error.is_none() && frame.cleanup_verified() && frame.native.root.as_ref().is_some_and(valid)
+    (!frame.case.candidate() || frame.candidate_token.as_ref().is_some_and(|c|c.matches_capability(&frame.capability_sid)))
+        && frame.native.error.is_none() && frame.cleanup_verified() && frame.native.root.as_ref().is_some_and(valid)
         && frame.native.console_hosts.len() <= 1 && frame.native.console_hosts.iter().all(|host|
             host.image.eq_ignore_ascii_case(CONHOST) && host.user_sid == frame.account_sid
             && host.exact_job_member && host.retained_handle_signaled)
@@ -260,6 +323,36 @@ pub fn assess(frame: &Frame, output_bytes_match: bool, ordinary_outside_write_su
             else if boundary.is_some_and(|s| matches!(s.tcp4, Some(Probe::Success)) || matches!(s.tcp6, Some(Probe::Success))) { Verdict::PolicyBoundaryFail } else { Verdict::Inconclusive },
         descendant_cleanup: if frame.case.descendant() { if script.is_some() && valid_native { Verdict::ObservedPass } else { Verdict::Inconclusive } } else { Verdict::NotTested },
         parent_death: Verdict::NotTested, full_pass: false }
+}
+/// Candidate-only evaluation cannot replace the separately evaluated controls.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct CandidateAcceptance {
+    pub recorded: usize, pub python_success: bool, pub identity_acceptance: bool,
+    pub filesystem_acceptance: bool, pub loopback_acceptance: bool,
+    pub cleanup_acceptance: bool, pub bounded_core_acceptance: bool,
+}
+pub fn candidate_acceptance(assessments: &[(Case,Assessment)],ordinary_ok: bool,suite_complete: bool) -> CandidateAcceptance {
+    let candidates=assessments.iter().filter(|(case,_)|case.candidate()).collect::<Vec<_>>();
+    let complete=cfg!(feature="lab-python-policy-repair-comparison") && candidates.len() == 3
+        && candidates.iter().map(|(case,_)|*case).eq(Case::ALL.into_iter().filter(|case|case.candidate()));
+    let python_success=complete && candidates.iter().all(|(_,a)|a.python_success);
+    let identity_acceptance=complete && candidates.iter().all(|(_,a)|a.identity == Verdict::ObservedPass);
+    let filesystem_acceptance=candidates.iter().find(|(case,_)|case.boundary()).is_some_and(|(_,a)|
+        a.python_success && a.outside_write == Verdict::ObservedPass && a.broad_read_truth == Verdict::ObservedPass
+        && a.explicit_denies == Verdict::ObservedPass);
+    let loopback_acceptance=candidates.iter().find(|(case,_)|case.boundary()).is_some_and(|(_,a)|a.loopback_only == Verdict::ObservedPass);
+    let cleanup_acceptance=complete && candidates.iter().filter(|(case,_)|case.descendant()).all(|(_,a)|a.descendant_cleanup == Verdict::ObservedPass);
+    let bounded_core_acceptance=ordinary_ok && suite_complete && python_success && identity_acceptance
+        && filesystem_acceptance && loopback_acceptance && cleanup_acceptance
+        && candidates.iter().all(|(_,a)|a.desktop != Verdict::PolicyBoundaryFail);
+    CandidateAcceptance {recorded:candidates.len(),python_success,identity_acceptance,filesystem_acceptance,
+        loopback_acceptance,cleanup_acceptance,bounded_core_acceptance}
+}
+pub fn any_policy_boundary_failure(assessments: &[(Case,Assessment)]) -> bool {
+    assessments.iter().any(|(_,a)|a.outside_write == Verdict::PolicyBoundaryFail
+        || a.explicit_denies == Verdict::PolicyBoundaryFail || a.loopback_only == Verdict::PolicyBoundaryFail
+        || a.desktop == Verdict::PolicyBoundaryFail)
 }
 #[cfg(windows)]
 #[path = "python_isolation/observer.rs"]

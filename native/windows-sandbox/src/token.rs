@@ -578,3 +578,10 @@ mod tests;
 #[cfg(test)]
 #[path = "token_groups_tests.rs"]
 mod token_groups_tests;
+
+// The composed repair experiment is never available through the product policy.
+#[cfg(feature = "lab-python-policy-repair-comparison")]
+#[path = "python_isolation/token_candidate.rs"]
+mod python_policy_repair_candidate;
+#[cfg(feature = "lab-python-policy-repair-comparison")]
+pub(crate) use python_policy_repair_candidate::create_lab_policy_repair_token_from;

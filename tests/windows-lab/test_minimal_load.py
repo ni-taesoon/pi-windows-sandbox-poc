@@ -150,7 +150,8 @@ class SourceContracts(unittest.TestCase):
 
     def test_reviewed_enforcement_source_snapshots(self):
         # Admission now includes the reviewed deny-order/coverage restoration.
-        # Masks, token construction and network enforcement remain unchanged.
+        # Masks and original token constructors stay unchanged. WFP snapshots
+        # include reviewed owned-account guards and default-off extra filters.
         expected = {
             'src/admission.rs': '96695cd13d54d4add094004d07d8b09a483ad2a229ebd0036969dd5eb2a7a3a0',
             'src/token.rs': '5cf5ec4c5b1d230130dd7809a0b2b6b1b12a44d9d6b46f975ae40e6dc29bf25f',
@@ -158,13 +159,20 @@ class SourceContracts(unittest.TestCase):
             'src/acl.rs': 'f8097901f8c17cc45f3593eb6d4cbd46e967e0081fd6c89fb2bd943f4b33c402',
             'src/setup.rs': '0512c223efe10766d852e65007e1582587e6c6f4618b0fb233a38468557f6bed',
             'src/setup/accounts.rs': 'd5c80b98fa4aa53cf486157632cec736ada6e8a2971e8516f120b58ef7b08915',
-            'src/network.rs': '487e79faa0d88cd6ff605715e7d385f004efb156c9bda8d577434ab3f09cfacd',
+            'src/network.rs': '27ba07a2cfd7aca2f980217e9de956eeec14573a999177ff01066415c69fd775',
             'src/network/firewall.rs': 'c92c6c9f49708349d17e4bc473151dadd0f82dc5cd5d7ce6812702669ec5cf8c',
-            'src/network/wfp.rs': 'ef0980326ed73dd693d4af2846b732f63027c091029cb48dfdd08b2311e6e2d3',
+            'src/network/wfp.rs': '2001efdc85c42e3e3fa3384b78f436a2d800832c9a1e533cdef59dc5a789a159',
         }
         for name, digest in expected.items():
             with self.subTest(name=name):
-                self.assertEqual(hashlib.sha256((ROOT / 'native/windows-sandbox' / name).read_bytes()).hexdigest(), digest)
+                data = (ROOT / 'native/windows-sandbox' / name).read_bytes()
+                if name.endswith('src/token.rs'):
+                    # Strip only the exact new default-off module hook; original
+                    # constructor bytes must still match their pinned old hash.
+                    hook = b'\n// The composed repair experiment is never available through the product policy.\n#[cfg(feature = "lab-python-policy-repair-comparison")]\n#[path = "python_isolation/token_candidate.rs"]\nmod python_policy_repair_candidate;\n#[cfg(feature = "lab-python-policy-repair-comparison")]\npub(crate) use python_policy_repair_candidate::create_lab_policy_repair_token_from;\n'
+                    self.assertTrue(data.endswith(hook))
+                    data = data[:-len(hook)]
+                self.assertEqual(hashlib.sha256(data).hexdigest(), digest)
 
     def test_driver_never_uses_control_as_fallback_or_pass(self):
         source = (ROOT / 'native/windows-sandbox/examples/minimal_load_comparison/windows.rs').read_text()

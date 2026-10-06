@@ -3,7 +3,8 @@ name: Windows Python isolation acceptance (security changes)
 # Only this dedicated branch may run. Neither a push nor a dispatch checkbox
 # grants security authorization. Obtain prior explicit external action-time
 # approval for this exact reviewed commit and fresh disposable win22 lifecycle,
-# including the synthetic Everyone Modify leaf and fixed loopback canaries.
+# including the synthetic Everyone Modify leaf, cap-only/upstream-DACL token
+# candidate, two dedicated-account outbound ALE connect blocks and loopback canaries.
 on:
   push:
     branches: [lab/python-isolation-acceptance]
@@ -14,7 +15,7 @@ on:
         required: true
         type: string
       approved_security_changes:
-        description: 'Prior external approval: fresh win22 VM, PiSandboxOffline, C:\PiSandboxLab ACL/store, synthetic outside-world Everyone Modify, product firewall/WFP, fixed Python loopback/child canaries, disable/dispose'
+        description: 'Prior external approval: fresh win22 VM, PiSandboxOffline, C:\PiSandboxLab ACL/store, synthetic outside-world Everyone Modify, product firewall/WFP plus 2 account-only V4/V6 outbound connect blocks, cap-only/upstream-DACL Python candidate, loopback/child canaries, disable/dispose'
         required: true
         default: false
         type: boolean
@@ -76,8 +77,9 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $actual -cne $env:SOURCE_SHA) { throw 'Source identity mismatch.' }
           New-Item -ItemType Directory -Path python-isolation-evidence | Out-Null
           [ordered]@{
-            sourceCommit=$actual; baselineCommit='bd5e91228649cebd8bd8471db65c0ba8fbb871ba';
-            scope='LAB_PYTHON_ISOLATION_ACCEPTANCE'; nativeValidated=$false
+            sourceCommit=$actual; baselineCommit='be298b70be88b4f418336f34f2676bd67a686ece';
+            scope='LAB_PYTHON_ISOLATION_ACCEPTANCE'; nativeValidated=$false;
+            labVariant='lab-python-policy-repair-comparison'; additionalAccountConnectFilters=2
           } | ConvertTo-Json | Set-Content -LiteralPath python-isolation-evidence/source-identity.json -Encoding UTF8
       - name: Verify frozen source manifest and closed production gate
         run: |
@@ -112,6 +114,10 @@ jobs:
             'native/windows-sandbox/src/python_isolation.rs',
             'native/windows-sandbox/src/python_isolation/broker.rs',
             'native/windows-sandbox/src/python_isolation/observer.rs',
+            'native/windows-sandbox/src/python_isolation/token_candidate.rs',
+            'native/windows-sandbox/src/token.rs', 'native/windows-sandbox/src/network.rs',
+            'native/windows-sandbox/src/network/wfp.rs', 'native/windows-sandbox/src/network/wfp/filter_specs.rs',
+            'native/windows-sandbox/tests/wfp_offline_scope_contract.rs',
             'native/windows-sandbox/src/admission.rs', 'native/windows-sandbox/src/admission_plan.rs',
             'native/windows-sandbox/tests/admission_policy_contract.rs',
             'native/windows-sandbox/src/broker.rs', 'native/windows-sandbox/src/lib.rs',
@@ -158,8 +164,10 @@ jobs:
           rustup run stable cargo check --locked --no-default-features --target x86_64-pc-windows-msvc --manifest-path native/windows-sandbox/Cargo.toml --bin pi-windows-sandbox --example python_isolation_acceptance 2>&1 | Tee-Object -FilePath python-isolation-evidence/default-check.log
           if ($LASTEXITCODE -ne 0) { throw 'Default-feature compilation failed; no staging.' }
           rustup run stable cargo check --locked --no-default-features --features lab-python-isolation-acceptance --target x86_64-pc-windows-msvc --manifest-path native/windows-sandbox/Cargo.toml --bin pi-windows-sandbox --example python_isolation_acceptance 2>&1 | Tee-Object -FilePath python-isolation-evidence/feature-check.log
-          if ($LASTEXITCODE -ne 0) { throw 'Feature compilation failed; no staging.' }
-          rustup run stable cargo build --locked --no-default-features --features lab-python-isolation-acceptance --target x86_64-pc-windows-msvc --manifest-path native/windows-sandbox/Cargo.toml --bin pi-windows-sandbox --example python_isolation_acceptance 2>&1 | Tee-Object -FilePath python-isolation-evidence/build.log
+          if ($LASTEXITCODE -ne 0) { throw 'Original lab feature compilation failed; no staging.' }
+          rustup run stable cargo check --locked --no-default-features --features lab-python-policy-repair-comparison --target x86_64-pc-windows-msvc --manifest-path native/windows-sandbox/Cargo.toml --bin pi-windows-sandbox --example python_isolation_acceptance 2>&1 | Tee-Object -FilePath python-isolation-evidence/policy-feature-check.log
+          if ($LASTEXITCODE -ne 0) { throw 'Approved policy comparison compilation failed; no staging.' }
+          rustup run stable cargo build --locked --no-default-features --features lab-python-policy-repair-comparison --target x86_64-pc-windows-msvc --manifest-path native/windows-sandbox/Cargo.toml --bin pi-windows-sandbox --example python_isolation_acceptance 2>&1 | Tee-Object -FilePath python-isolation-evidence/build.log
           if ($LASTEXITCODE -ne 0) { throw 'Native build/link failed; no staging.' }
           $build = "$PWD/native/windows-sandbox/target/x86_64-pc-windows-msvc/debug"
           [ordered]@{
@@ -171,12 +179,17 @@ jobs:
             fixtureSha256=(Get-FileHash -LiteralPath scripts/python-isolation-fixture.py -Algorithm SHA256).Hash;
             pythonSha256=(Get-FileHash -LiteralPath $env:PYTHON_EXECUTABLE -Algorithm SHA256).Hash;
             pythonVersion='3.12.10'; architecture='x64';
+            labVariant='lab-python-policy-repair-comparison'; additionalAccountConnectFilters=2;
             provenance='Pinned source, installed official Rust/MSVC, official setup-python exact runtime. Per-run hashes are not independent compiler or upstream runtime provenance verification.'
           } | ConvertTo-Json | Set-Content -LiteralPath python-isolation-evidence/build-identity.json -Encoding UTF8
       - name: Verify pure native contracts before any lab security setup
         run: |
-          rustup run stable cargo test --locked --no-default-features --features lab-python-isolation-acceptance --target x86_64-pc-windows-msvc --manifest-path native/windows-sandbox/Cargo.toml --test python_isolation_contract --test admission_policy_contract --test broker_wait_contract --test startup_diagnostics_contract 2>&1 | Tee-Object -FilePath python-isolation-evidence/native-contract-tests.log
+          rustup run stable cargo test --locked --no-default-features --features lab-python-policy-repair-comparison --target x86_64-pc-windows-msvc --manifest-path native/windows-sandbox/Cargo.toml --test python_isolation_contract --test admission_policy_contract --test wfp_offline_scope_contract --test broker_wait_contract --test startup_diagnostics_contract 2>&1 | Tee-Object -FilePath python-isolation-evidence/native-contract-tests.log
           if ($LASTEXITCODE -ne 0) { throw 'Pure native contracts failed; no staging or setup.' }
+          # This exact module contains only four pure spec/shape tests; never run
+          # the full Windows library security-test suite before authorization.
+          rustup run stable cargo test --locked --no-default-features --features lab-python-policy-repair-comparison --target x86_64-pc-windows-msvc --manifest-path native/windows-sandbox/Cargo.toml --lib network::wfp::tests:: 2>&1 | Tee-Object -FilePath python-isolation-evidence/native-wfp-scope-tests.log
+          if ($LASTEXITCODE -ne 0) { throw 'Pure WFP scope guards failed; no staging or setup.' }
       - name: Stage fixed protected lab and approved synthetic outside-world leaf
         id: stage
         env:
@@ -342,14 +355,17 @@ jobs:
           foreach ($spec in $specifications) {
             # Each query and each field is isolated. A failed SDDL/address parse
             # never removes successfully observed rule status or other filters.
+            # COM INetFwRule.SetName writes the friendly label (DisplayName),
+            # not NetSecurity's distinct unique Name/ID. These fixed labels have
+            # no wildcard or indirect localization syntax; exact postcheck follows.
             $ruleQuery = Query-One 'RULE_QUERY' {
-              Get-NetFirewallRule -PolicyStore ActiveStore -Name $spec.name -ErrorAction Stop
+              Get-NetFirewallRule -PolicyStore ActiveStore -DisplayName $spec.name -ErrorAction Stop
             }
             $rule = $ruleQuery.item
             if ($null -ne $rule) {
               try {
-                if ((Property-Value $rule 'Name') -cne $spec.name) { throw 'NAME_MISMATCH' }
-              } catch { $rule=$null; $ruleQuery.diagnostic=(Diagnostic 'RULE_NAME' 'INCONCLUSIVE' 'NAME_UNAVAILABLE_OR_MISMATCH' $_) }
+                if ((Property-Value $rule 'DisplayName') -cne $spec.name) { throw 'DISPLAY_NAME_MISMATCH' }
+              } catch { $rule=$null; $ruleQuery.diagnostic=(Diagnostic 'RULE_DISPLAY_NAME' 'INCONCLUSIVE' 'DISPLAY_NAME_UNAVAILABLE_OR_MISMATCH' $_) }
             }
             $addressQuery = Query-One 'ADDRESS_QUERY' {
               if ($null -eq $rule) { throw 'RULE_UNAVAILABLE' }
@@ -411,7 +427,7 @@ jobs:
             } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath python-isolation-evidence/python-isolation-firewall-active-store.json -Encoding UTF8
           } catch { Write-Output 'Optional ActiveStore metadata unavailable; fixed runtime observations remain required.' }
           exit 0
-      - name: Run fixed ordinary control and separate strict and pinned canaries once
+      - name: Run fixed controls and separate cap-only policy candidate once
         id: run
         run: |
           # All network controls/probes are confined to 127.0.0.1:43871 and
@@ -435,6 +451,7 @@ jobs:
             'python-isolation-ordinary-outside.json',
             'python-isolation-strict-boundary.json', 'python-isolation-strict-child-normal-exit.json', 'python-isolation-strict-child-timeout.json',
             'python-isolation-pinned-boundary.json', 'python-isolation-pinned-child-normal-exit.json', 'python-isolation-pinned-child-timeout.json',
+            'python-isolation-candidate-boundary.json', 'python-isolation-candidate-child-normal-exit.json', 'python-isolation-candidate-child-timeout.json',
             'python-isolation-run.json', 'python-isolation-recovery.json', 'python-isolation-summary.json')) {
             $source = Join-Path 'C:\PiSandboxLab\trusted' $name
             if (Test-Path -LiteralPath $source -PathType Leaf) {
@@ -444,7 +461,8 @@ jobs:
             }
           }
           "Final explicit disable step: $env:FINAL_DISABLE_OUTCOME. Failure requires investigation and fresh hosted VM disposal." | Add-Content $env:GITHUB_STEP_SUMMARY
-          'LAB ONLY: strict and pinned results remain separate. Parent-death is NOT_TESTED and full isolation acceptance is unavailable in this revision. Production activation stays false.' | Add-Content $env:GITHUB_STEP_SUMMARY
+          'LAB ONLY: original strict/pinned controls and cap-only/upstream-DACL candidate remain separate; all use the two dedicated-account ALE connect blocks. Parent-death is NOT_TESTED and full isolation acceptance is unavailable in this revision. Production activation stays false.' | Add-Content $env:GITHUB_STEP_SUMMARY
+          'Account disable retains all 14 scoped WFP filters until disposable VM teardown; no reboot/BFE-restart or inbound/protocol-completeness claim.' | Add-Content $env:GITHUB_STEP_SUMMARY
           'Per-run all-file runtime hashes bind observed bytes; they do not independently prove upstream provenance. No automatic in-job retry or host fallback. Dispose the fresh VM through hosted job teardown.' | Add-Content $env:GITHUB_STEP_SUMMARY
       - name: Retain only allowlisted safe JSON and logs, never credentials or store
         if: always()
@@ -463,9 +481,11 @@ jobs:
             python-isolation-evidence/toolchain.log
             python-isolation-evidence/default-check.log
             python-isolation-evidence/feature-check.log
+            python-isolation-evidence/policy-feature-check.log
             python-isolation-evidence/build.log
             python-isolation-evidence/build-identity.json
             python-isolation-evidence/native-contract-tests.log
+            python-isolation-evidence/native-wfp-scope-tests.log
             python-isolation-evidence/stage.log
             python-isolation-evidence/setup.log
             python-isolation-evidence/run.log
@@ -480,6 +500,9 @@ jobs:
             python-isolation-evidence/python-isolation-pinned-boundary.json
             python-isolation-evidence/python-isolation-pinned-child-normal-exit.json
             python-isolation-evidence/python-isolation-pinned-child-timeout.json
+            python-isolation-evidence/python-isolation-candidate-boundary.json
+            python-isolation-evidence/python-isolation-candidate-child-normal-exit.json
+            python-isolation-evidence/python-isolation-candidate-child-timeout.json
             python-isolation-evidence/python-isolation-run.json
             python-isolation-evidence/python-isolation-recovery.json
             python-isolation-evidence/python-isolation-summary.json

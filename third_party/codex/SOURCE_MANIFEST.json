@@ -69,7 +69,7 @@
       "destination": "native/windows-sandbox/src/network.rs",
       "upstream": [],
       "origin": "new product integration source",
-      "adapted_sha256": "487e79faa0d88cd6ff605715e7d385f004efb156c9bda8d577434ab3f09cfacd"
+      "adapted_sha256": "27ba07a2cfd7aca2f980217e9de956eeec14573a999177ff01066415c69fd775"
     },
     {
       "destination": "native/windows-sandbox/src/network/firewall.rs",
@@ -89,7 +89,7 @@
           "sha256": "82effcda9c951ad62d1f1b4afa9b4f0ad59b3d35d7c2feab53a9b6838dd93fc4"
         }
       ],
-      "adapted_sha256": "ef0980326ed73dd693d4af2846b732f63027c091029cb48dfdd08b2311e6e2d3"
+      "adapted_sha256": "2001efdc85c42e3e3fa3384b78f436a2d800832c9a1e533cdef59dc5a789a159"
     },
     {
       "destination": "native/windows-sandbox/src/network/wfp/filter_specs.rs",
@@ -99,7 +99,7 @@
           "sha256": "11bef68565843485376f31dea62930d833c6b758ccc2a8613a8b1872a2a0e1f1"
         }
       ],
-      "adapted_sha256": "c7d1b6643cce358ba20a804758ea4382279d7f0463a2cc450233cdd02cc3f64a"
+      "adapted_sha256": "95e73a80ae211ceab6806d5bca1e814931f6c4d9607d6148d5bd294254842def"
     },
     {
       "destination": "native/windows-sandbox/src/policy_masks.rs",
@@ -215,7 +215,7 @@
           "sha256": "29b689c9c907e7895dca7cc69004d0393545a890a2787c12c488bab93a70409e"
         }
       ],
-      "adapted_sha256": "5cf5ec4c5b1d230130dd7809a0b2b6b1b12a44d9d6b46f975ae40e6dc29bf25f"
+      "adapted_sha256": "e6422f64858291b79fee2757dca2b9244c26da1c88abef27b88641051b4b07e5"
     },
     {
       "destination": "native/windows-sandbox/src/token_groups_tests.rs",
@@ -295,25 +295,31 @@
       "destination": "native/windows-sandbox/src/python_isolation.rs",
       "upstream": [],
       "origin": "new default-off fixed Python acceptance laboratory source",
-      "adapted_sha256": "62c5dab2164e182185a99ee3356835d595f9e42eb3ad8bb56b16ec3945441c06"
+      "adapted_sha256": "473f283bca88e4aa9a53b0838f5a0830196d75176937e39750ee4383f2df6d96"
     },
     {
       "destination": "native/windows-sandbox/src/python_isolation/broker.rs",
       "upstream": [],
       "origin": "new default-off fixed Python acceptance laboratory source",
-      "adapted_sha256": "20381446cb30aed832efee61b64d01aea2c86e6ee8f38085da14a0f6a1eb8084"
+      "adapted_sha256": "1e7250370788c4f5014c8a456a944d165144b336d12633a5079173d71f93c987"
     },
     {
       "destination": "native/windows-sandbox/src/python_isolation/observer.rs",
       "upstream": [],
       "origin": "new default-off fixed Python acceptance laboratory source",
-      "adapted_sha256": "9d751051da190320f9f1052ea4c1f34c8148ab9a1be3ca78febc596af60a1698"
+      "adapted_sha256": "77b783fd66fa950c22d5903c8b7cf163ceb295d833e620ce762b371df04d7190"
     },
     {
       "destination": "native/windows-sandbox/src/admission_plan.rs",
       "upstream": [],
       "origin": "new portable admission ordering, deny postconditions and rollback control flow",
       "adapted_sha256": "329ed3ea9dc38d7923deca1c49204c069e4f08f1c49bdf3b460fcf8993d3e794"
+    },
+    {
+      "destination": "native/windows-sandbox/src/python_isolation/token_candidate.rs",
+      "upstream": [],
+      "origin": "new default-off capability-only token with upstream default-DACL comparison source",
+      "adapted_sha256": "1028ec388c2be6884b35cc91cf241a3b1b1b07e72cfee4cc13818163b7c5fb7f"
     }
   ]
 }

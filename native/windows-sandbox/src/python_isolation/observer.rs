@@ -222,7 +222,7 @@ unsafe fn inspect_desktop(tid: u32) -> Result<String> {
     Ok(String::from_utf16(&name[..n])?)
 }
 
-unsafe fn restricting_sids(handle: HANDLE) -> Result<Vec<String>> {
+pub(crate) unsafe fn restricting_sids(handle: HANDLE) -> Result<Vec<String>> {
     let mut needed = 0;
     GetTokenInformation(handle, TokenRestrictedSids, null_mut(), 0, &mut needed);
     let sizing_error = GetLastError();

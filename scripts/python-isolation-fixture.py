@@ -13,7 +13,8 @@ WORK = ROOT / "work"
 OUTSIDE = ROOT / "fixtures" / "outside-world"
 MODES = frozenset(("ordinary-outside", "strict-boundary", "strict-child-normal-exit",
                    "strict-child-timeout", "pinned-boundary", "pinned-child-normal-exit",
-                   "pinned-child-timeout", "descendant-hold"))
+                   "pinned-child-timeout", "candidate-boundary", "candidate-child-normal-exit",
+                   "candidate-child-timeout", "descendant-hold"))
 
 def probe(action):
     try:

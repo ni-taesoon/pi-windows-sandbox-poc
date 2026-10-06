@@ -83,18 +83,52 @@ pub fn fixed_python_isolation_helper_main(name: &str, expected_broker: u32) -> R
         use windows_sys::Win32::System::Diagnostics::Debug::{GetErrorMode, SetErrorMode, SEM_FAILCRITICALERRORS};
         SetErrorMode(GetErrorMode() | SEM_FAILCRITICALERRORS);
         ensure!(GetErrorMode() & SEM_FAILCRITICALERRORS != 0, "critical error mode failed");
+        #[cfg(feature="lab-python-policy-repair-comparison")]
+        let mut candidate: Option<(Handle,lab::CandidateTokenConfiguration)> = None;
+        #[cfg(feature="lab-python-policy-repair-comparison")]
+        let mut acknowledged_controls=0usize;
         for case in Case::ALL {
+            // This branch is reached only after the existing seven control frames
+            // were persisted by the owner and their ordered ACKs received below.
+            #[cfg(feature="lab-python-policy-repair-comparison")]
+            if case.candidate() && candidate.is_none() {
+                ensure!(acknowledged_controls == 7 && case == Case::CandidateBoundary,
+                    "candidate requires seven durable control acknowledgements");
+                match token::create_lab_policy_repair_token_from(base.raw(),cap.as_ptr()) {
+                    Ok((raw,configuration)) => candidate=Some((Handle::from_raw(raw)?,configuration)),
+                    Err(error) => {
+                        let frame=Frame {case,account_sid:account_sid.clone(),capability_sid:payload.capability_sid.clone(),
+                            private_desktop:payload.private_desktop.clone(),run:None,
+                            launch_error:Some(format!("candidate token construction failed before launch: {error:#}")),
+                            native:lab::NativeEvidence::default(),candidate_token:None};
+                        send(&pipe,&frame,Instant::now()+Duration::from_secs(10))?;
+                        anyhow::bail!("candidate token unavailable; remaining candidate cases NOT_ATTEMPTED");
+                    }
+                }
+            }
             let fixed = FixedRequest::new(lab::request(case, payload.request.parent_pid, payload.request.policy_hash.clone()))?;
             let mut observer = lab::observer::Observer::new();
-            let result = crate::process::run_fixed_python(if case.pinned() { pinned.raw() } else { strict.raw() },
+            let launch_token=if case.pinned() {pinned.raw()} else {strict.raw()};
+            #[cfg(feature="lab-python-policy-repair-comparison")]
+            let launch_token=if case.candidate() {candidate.as_ref().context("candidate token missing")?.0.raw()} else {launch_token};
+            let result = crate::process::run_fixed_python(launch_token,
                 &payload.private_desktop, &fixed, &parent, &mut observer);
             let frame = Frame { case, account_sid: account_sid.clone(), capability_sid: payload.capability_sid.clone(),
                 private_desktop: payload.private_desktop.clone(), launch_error: result.as_ref().err().map(|e| format!("{e:#}")),
-                run: result.ok(), native: observer.evidence };
+                run: result.ok(), native: observer.evidence,
+                candidate_token: {
+                    #[cfg(feature="lab-python-policy-repair-comparison")]
+                    { if case.candidate() {Some(candidate.as_ref().context("candidate configuration missing")?.1.clone())} else {None} }
+                    #[cfg(not(feature="lab-python-policy-repair-comparison"))]
+                    { None }
+                },
+            };
             send(&pipe, &frame, Instant::now() + Duration::from_secs(10))?;
             ensure!(frame.cleanup_verified(), "Python cleanup unverified; suite stopped");
             let ack: Recorded = receive(&pipe, Instant::now() + Duration::from_secs(10))?;
             ensure!(ack.case == case, "Python evidence acknowledgement mismatch");
+            #[cfg(feature="lab-python-policy-repair-comparison")]
+            if !case.candidate() { acknowledged_controls += 1; }
         }
     }
     Ok(())

@@ -6,6 +6,20 @@ mod wfp;
 
 use anyhow::{ensure, Result};
 
+/// Read-only compiled policy metadata, not proof of installed enforcement.
+pub fn expected_wfp_filter_count() -> usize {
+    wfp::expected_filter_count()
+}
+
+/// Identifies the compiled policy for comparisons with historical lab runs.
+pub fn wfp_policy_provenance() -> &'static str {
+    if cfg!(feature = "lab-python-policy-repair-comparison") {
+        "lab-owned-account-connect-block-v1"
+    } else {
+        "baseline-port-icmp-v1"
+    }
+}
+
 pub(crate) fn install_offline_protection(sid: &str) -> Result<usize> {
     ensure!(
         sid == crate::setup::local_offline_account_sid()?,

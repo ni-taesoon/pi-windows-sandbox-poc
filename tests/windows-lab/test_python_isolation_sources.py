@@ -24,6 +24,9 @@ EVIDENCE_JSON = {
     'python-isolation-pinned-boundary.json',
     'python-isolation-pinned-child-normal-exit.json',
     'python-isolation-pinned-child-timeout.json',
+    'python-isolation-candidate-boundary.json',
+    'python-isolation-candidate-child-normal-exit.json',
+    'python-isolation-candidate-child-timeout.json',
     'python-isolation-run.json',
     'python-isolation-recovery.json',
     'python-isolation-summary.json',
@@ -111,10 +114,13 @@ class PythonIsolationWorkflowContracts(unittest.TestCase):
         for required in [
             'cargo check --locked --no-default-features --target',
             'cargo check --locked --no-default-features --features lab-python-isolation-acceptance',
-            'cargo build --locked --no-default-features --features lab-python-isolation-acceptance',
-            'cargo test --locked --no-default-features --features lab-python-isolation-acceptance',
+            'cargo check --locked --no-default-features --features lab-python-policy-repair-comparison',
+            'cargo build --locked --no-default-features --features lab-python-policy-repair-comparison',
+            'cargo test --locked --no-default-features --features lab-python-policy-repair-comparison',
             '--test python_isolation_contract',
             '--test admission_policy_contract',
+            '--test wfp_offline_scope_contract',
+            '--lib network::wfp::tests::',
             '-m unittest discover -s tests/windows-lab -p test_python_isolation_sources.py',
             '-I -S -B tests/python-probe/test_isolation_fixture.py',
         ]:
@@ -140,6 +146,12 @@ class PythonIsolationWorkflowContracts(unittest.TestCase):
             'native/windows-sandbox/src/python_isolation.rs',
             'native/windows-sandbox/src/python_isolation/broker.rs',
             'native/windows-sandbox/src/python_isolation/observer.rs',
+            'native/windows-sandbox/src/python_isolation/token_candidate.rs',
+            'native/windows-sandbox/src/token.rs',
+            'native/windows-sandbox/src/network.rs',
+            'native/windows-sandbox/src/network/wfp.rs',
+            'native/windows-sandbox/src/network/wfp/filter_specs.rs',
+            'native/windows-sandbox/tests/wfp_offline_scope_contract.rs',
             'native/windows-sandbox/src/admission.rs',
             'native/windows-sandbox/src/admission_plan.rs',
             'native/windows-sandbox/tests/admission_policy_contract.rs',
@@ -219,17 +231,33 @@ class PythonIsolationWorkflowContracts(unittest.TestCase):
             'pi_sandbox_offline_block_loopback_inbound',
         ])
         self.assertEqual(observation.count('Get-NetFirewallRule '), 1)
-        self.assertIn('Get-NetFirewallRule -PolicyStore ActiveStore -Name $spec.name -ErrorAction Stop', observation)
+        self.assertIn('Get-NetFirewallRule -PolicyStore ActiveStore -DisplayName $spec.name -ErrorAction Stop', observation)
         for filter_name in ['Address', 'Port', 'Security']:
             self.assertIn(f'Get-NetFirewall{filter_name}Filter -AssociatedNetFirewallRule $rule -ErrorAction Stop', observation)
         for forbidden in ['Set-NetFirewall', 'New-NetFirewall', 'Remove-NetFirewall',
                           'Enable-NetFirewall', 'Disable-NetFirewall', 'netsh ', 'auditpol ',
                           'pktmon ', 'netsh.exe', 'Get-NetFirewallProfile', 'Get-LocalUser',
-                          'Get-NetFirewallRule -All', 'Get-NetFirewallRule -DisplayName']:
+                          'Get-NetFirewallRule -All', 'Get-NetFirewallRule -PolicyStore ActiveStore -Name ']:
             self.assertNotIn(forbidden, observation)
         self.assertIn('$items.Count -ne 1', observation)
         for stage in ['RULE_QUERY', 'ADDRESS_QUERY', 'PORT_QUERY', 'SECURITY_QUERY']:
             self.assertIn("Query-One '" + stage + "'", observation)
+
+    def test_firewall_com_friendly_labels_use_exact_display_name_lookup(self):
+        observation = self.firewall_observation()
+        self.assertIn("Property-Value $rule 'DisplayName') -cne $spec.name", observation)
+        self.assertNotIn("Property-Value $rule 'Name'", observation)
+        self.assertIn("Diagnostic 'RULE_DISPLAY_NAME' 'INCONCLUSIVE' 'DISPLAY_NAME_UNAVAILABLE_OR_MISMATCH'", observation)
+        lookup = observation.split("$ruleQuery = Query-One 'RULE_QUERY' {", 1)[1].split('            }', 1)[0]
+        self.assertEqual(lookup.count('Get-NetFirewallRule '), 1)
+        self.assertNotIn('*', lookup)
+        self.assertNotIn('?', lookup)
+        self.assertNotIn('-All', lookup)
+        self.assertNotIn('Where-Object', lookup)
+        self.assertIn("if ($items.Count -ne 1)", observation)
+        self.assertLess(observation.index("Property-Value $rule 'DisplayName'"),
+                        observation.index("Query-One 'ADDRESS_QUERY'"))
+        self.assertIn('INetFwRule.SetName writes the friendly label (DisplayName)', observation)
 
     def test_firewall_metadata_serializes_only_normalized_status_and_scope_facts(self):
         observation = self.firewall_observation()
