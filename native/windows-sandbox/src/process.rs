@@ -164,7 +164,7 @@ pub(crate) unsafe fn run_restricted_with_parent(
     parent: &Handle,
 ) -> Result<RunResult> {
     run_impl(
-        token,
+        ChildLaunch::Restricted(token),
         private_desktop,
         request,
         parent,
@@ -180,17 +180,40 @@ pub(crate) unsafe fn run_restricted_with_parent_trace(
     parent: &Handle,
     trace: &mut crate::loader_trace::LoaderTrace,
 ) -> Result<RunResult> {
-    run_impl(token, private_desktop, request, parent, Some(trace))
+    run_impl(ChildLaunch::Restricted(token), private_desktop, request, parent, Some(trace))
+}
+
+/// Internal, fixed-fixture-only control. The authenticated dedicated helper calls
+/// this after ordinary admission; it neither changes nor substitutes a token.
+#[cfg(feature = "lab-minimal-load-comparison")]
+pub(crate) unsafe fn run_fixed_account_control(
+    fixed: &crate::minimal_load::FixedLoadRequest,
+    private_desktop: &str,
+    parent: &Handle,
+) -> Result<RunResult> {
+    run_impl(ChildLaunch::FixedAccountControl, private_desktop, fixed.request(), parent)
+}
+#[derive(Clone, Copy)]
+enum ChildLaunch {
+    Restricted(HANDLE),
+    #[cfg(feature = "lab-minimal-load-comparison")]
+    FixedAccountControl,
 }
 unsafe fn run_impl(
-    token: HANDLE,
+    launch: ChildLaunch,
     private_desktop: &str,
     request: &RunRequest,
     parent: &Handle,
     #[cfg(feature = "lab-loader-trace")] trace: Option<&mut crate::loader_trace::LoaderTrace>,
 ) -> Result<RunResult> {
     request.validate()?;
-    ensure!(token != 0 && token != INVALID_HANDLE_VALUE, "invalid token");
+    match launch {
+        ChildLaunch::Restricted(token) => ensure!(token != 0 && token != INVALID_HANDLE_VALUE, "invalid token"),
+        #[cfg(feature = "lab-minimal-load-comparison")]
+        ChildLaunch::FixedAccountControl => {
+            crate::minimal_load::FixedLoadRequest::new(request.clone())?;
+        }
+    }
     ensure!(
         private_desktop
             .strip_prefix("Winsta0\\PiSandboxDesktop-")
@@ -256,19 +279,35 @@ unsafe fn run_impl(
         } else {
             0
         };
-    win(CreateProcessAsUserW(
-        token,
-        executable.as_ptr(),
-        command.as_mut_ptr(),
-        null(),
-        null(),
-        1,
-        creation_flags,
-        env.as_ptr().cast::<c_void>(),
-        cwd.as_ptr(),
-        &startup.StartupInfo,
-        &mut info,
-    ))?;
+    let created = match launch {
+        ChildLaunch::Restricted(token) => CreateProcessAsUserW(
+            token,
+            executable.as_ptr(),
+            command.as_mut_ptr(),
+            null(),
+            null(),
+            1,
+            creation_flags,
+            env.as_ptr().cast::<c_void>(),
+            cwd.as_ptr(),
+            &startup.StartupInfo,
+            &mut info,
+        ),
+        #[cfg(feature = "lab-minimal-load-comparison")]
+        ChildLaunch::FixedAccountControl => CreateProcessW(
+            executable.as_ptr(),
+            command.as_mut_ptr(),
+            null(),
+            null(),
+            1,
+            creation_flags,
+            env.as_ptr().cast::<c_void>(),
+            cwd.as_ptr(),
+            &startup.StartupInfo,
+            &mut info,
+        ),
+    };
+    win(created)?;
     let process = Handle::from_raw(info.hProcess)?;
     let _thread = Handle::from_raw(info.hThread)?;
     drop(stdin_read);

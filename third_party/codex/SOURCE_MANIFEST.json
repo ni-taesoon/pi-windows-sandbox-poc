@@ -41,7 +41,7 @@
           "sha256": "2630fa3d2d033005343448b13981516bf7b0f72457bb5eb6abb0cde09592c4e2"
         }
       ],
-      "adapted_sha256": "ee009a9df4bb2a23ef78e4a5589755909907e23af6f03707ffa22431109d9320"
+      "adapted_sha256": "8ee4535a965d14e83efc9250229a907c7980d109b5daa8982719bafe28aa5d20"
     },
     {
       "destination": "native/windows-sandbox/src/desktop.rs",
@@ -57,13 +57,13 @@
       "destination": "native/windows-sandbox/src/lib.rs",
       "upstream": [],
       "origin": "new product integration source",
-      "adapted_sha256": "d1e2187f25c661515c9e78dede225106c43282a7aac58f202cb00117659fe2d1"
+      "adapted_sha256": "ad69b42809404f4d63277bee8b374ef378c260cce6cd6713190e6b9bdf554340"
     },
     {
       "destination": "native/windows-sandbox/src/main.rs",
       "upstream": [],
       "origin": "new product integration source",
-      "adapted_sha256": "41a865beb8ec189d121f3ee8099b3438b0dd4378224b9a71429cb91b63440afb"
+      "adapted_sha256": "78d0111a4f2eccd2bad91976258a3bb706a7bd7c2d7f62d957c38c35315589d4"
     },
     {
       "destination": "native/windows-sandbox/src/network.rs",
@@ -129,7 +129,7 @@
           "sha256": "df54d9d966509871403c5237412a3c7ff17cbdb9766b9690438f27c3b683bdcf"
         }
       ],
-      "adapted_sha256": "415166b9d86ec6f42f58b7139932a9dd159bac222cfebd518fa21a402f029b73"
+      "adapted_sha256": "42f69f6a6b58305a571589bdcf26437f2cd85dce90cbc2f68efac74e535a8b37"
     },
     {
       "destination": "native/windows-sandbox/src/protocol.rs",
@@ -284,6 +284,12 @@
       "upstream": [],
       "origin": "new product integration source",
       "adapted_sha256": "fb198b4b172a6f96b177e8556fc9fa613fe72b83ec72a68227f9817e72b605bf"
+    },
+    {
+      "destination": "native/windows-sandbox/src/minimal_load.rs",
+      "upstream": [],
+      "origin": "new lab-only fixed request and result contracts",
+      "adapted_sha256": "cf335cc4b585ed0c38220ab218c7990e251178e8e24eb2c00db538df62a78c35"
     }
   ]
 }

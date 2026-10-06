@@ -153,7 +153,6 @@ class SourceContracts(unittest.TestCase):
             'src/admission.rs': '3f8f0a9e1e18b74bf0a12f605049e648e17fa2bda1c33872af27d5f7119e1ca3',
             'src/token.rs': '5cf5ec4c5b1d230130dd7809a0b2b6b1b12a44d9d6b46f975ae40e6dc29bf25f',
             'src/desktop.rs': 'c8a0922a34654a20260ba906dc90c4b12e0485a9aa84a7e12bc098f5a25c4a29',
-            'src/process.rs': '415166b9d86ec6f42f58b7139932a9dd159bac222cfebd518fa21a402f029b73',
             'src/acl.rs': 'f8097901f8c17cc45f3593eb6d4cbd46e967e0081fd6c89fb2bd943f4b33c402',
             'src/setup.rs': '0512c223efe10766d852e65007e1582587e6c6f4618b0fb233a38468557f6bed',
             'src/setup/accounts.rs': 'd5c80b98fa4aa53cf486157632cec736ada6e8a2971e8516f120b58ef7b08915',
@@ -168,10 +167,10 @@ class SourceContracts(unittest.TestCase):
     def test_driver_never_uses_control_as_fallback_or_pass(self):
         source = (ROOT / 'native/windows-sandbox/examples/minimal_load_comparison/windows.rs').read_text()
         self.assertEqual(source.count('let control = run_control(&req);'), 1)
-        self.assertEqual(source.count('broker::run_via_dedicated_helper('), 1)
+        self.assertEqual(source.count('broker::run_fixed_minimal_load_comparison('), 1)
         self.assertIn('.env_clear().envs(&req.env).current_dir(&req.cwd)', source)
         self.assertIn('req.clone()', source)
-        self.assertIn('control_observation.is_ok() && sandbox_observation.is_ok()', source)
+        self.assertIn('control_observation.is_ok() && account_observation.is_ok() && sandbox_observation.is_ok()', source)
         self.assertIn('"nativeValidated":false', source)
         self.assertIn('"normalValidationEligible":false', source)
         self.assertIn('"pythonValidationEligible":false', source)
@@ -182,8 +181,67 @@ class SourceContracts(unittest.TestCase):
         self.assertIn('recv_timeout(Duration::from_secs(2))', source)
         self.assertEqual(source.count('"freshLoadComparisonEligible"'), 1)
         setup_body = source[source.index('fn execute('):]
-        for run_only in ['control_observation', 'sandbox_observation', 'freshLoadComparisonEligible']:
+        for run_only in ['control_observation', 'account_observation', 'sandbox_observation', 'freshLoadComparisonEligible']:
             self.assertNotIn(run_only, setup_body)
+
+    def test_fixed_account_control_is_feature_only_and_not_a_protocol_switch(self):
+        base = ROOT / 'native/windows-sandbox'
+        broker = (base / 'src/broker.rs').read_text()
+        process = (base / 'src/process.rs').read_text()
+        entry = (base / 'src/main.rs').read_text()
+        protocol = (base / 'src/protocol.rs').read_text()
+        contract = (base / 'src/minimal_load.rs').read_text()
+        self.assertIn('#[cfg(feature = "lab-minimal-load-comparison")]\npub unsafe fn run_fixed_minimal_load_comparison(', broker)
+        self.assertIn('#[cfg(feature = "lab-minimal-load-comparison")]\npub fn fixed_minimal_load_helper_main(', broker)
+        self.assertIn('#[cfg(all(windows, feature = "lab-minimal-load-comparison"))]', entry)
+        self.assertIn('internal-fixed-minimal-load-helper', entry)
+        self.assertIn('pub struct FixedLoadRequest(RunRequest);', contract)
+        self.assertEqual(broker.count('FixedLoadRequest::new(request.clone())?'), 2)
+        self.assertIn('FixedLoadRequest::new(request.clone())?', process)
+        self.assertIn('run_impl(ChildLaunch::FixedAccountControl', process)
+        self.assertIn('#[cfg(feature = "lab-minimal-load-comparison")]\n    FixedAccountControl,', process)
+        self.assertEqual(process.count('=> CreateProcessW('), 1)
+        for forbidden in ['FixedAccountControl', 'FixedMinimalLoad', 'unrestricted']:
+            self.assertNotIn(forbidden, protocol)
+        self.assertNotIn('token == 0', process)
+        self.assertNotIn('CREATE_BREAKAWAY_FROM_JOB', process)
+        self.assertNotIn('AdjustTokenPrivileges', process)
+
+    def test_production_runner_preparation_and_cleanup_are_byte_identical(self):
+        source = (ROOT / 'native/windows-sandbox/src/process.rs').read_text()
+        # Hash only unchanged shared preparation and cleanup from PR 28. The
+        # creation dispatch is separately checked; no Windows behavior is claimed.
+        preparation = source[source.index('    ensure!(\n        private_desktop'):source.index('    let created = match launch')]
+        cleanup = source[source.index('    let process = Handle::from_raw(info.hProcess)?;'):]
+        self.assertEqual(hashlib.sha256(preparation.encode()).hexdigest(),
+                         '636e78a414906c88403365314a13156b05e62b39897b4359013f4ef443d826cf')
+        self.assertEqual(hashlib.sha256(cleanup.encode()).hexdigest(),
+                         '10f74c9cfd42e6488dada5d3b6d1fe31408ce006a56f75f3685197ff92b634d0')
+        restricted = source[source.index('ChildLaunch::Restricted(token) => CreateProcessAsUserW('):]
+        call = restricted[:restricted.index('        ),')]
+        expected = '''ChildLaunch::Restricted(token) => CreateProcessAsUserW(
+            token, executable.as_ptr(), command.as_mut_ptr(), null(), null(), 1,
+            creation_flags, env.as_ptr().cast::<c_void>(), cwd.as_ptr(),
+            &startup.StartupInfo, &mut info,'''
+        self.assertEqual(''.join(call.split()), ''.join(expected.split()))
+        wrapper = source[source.index('pub(crate) unsafe fn run_restricted_with_parent('):source.index('#[cfg(feature = "lab-loader-trace")]\npub(crate) unsafe fn')]
+        self.assertIn('ChildLaunch::Restricted(token)', wrapper)
+        self.assertNotIn('FixedAccountControl', wrapper)
+
+    def test_fixed_pair_fail_stops_and_preserves_first_evidence(self):
+        broker = (ROOT / 'native/windows-sandbox/src/broker.rs').read_text()
+        owner, helper = broker.split('fn helper_main_impl(', 1)
+        self.assertIn('HelperExecution::FixedMinimalLoad => Duration::from_secs(70)', owner)
+        self.assertIn('record_account.as_mut()', owner)
+        self.assertLess(owner.index('account.can_continue()'), owner.index('let result: RunResult = pipe'))
+        self.assertLess(helper.index('run_fixed_account_control('), helper.index('account.can_continue()'))
+        self.assertLess(helper.index('account.can_continue()'), helper.index('process::run_restricted_with_parent('))
+        self.assertLess(helper.index('pipe.send(&account,'), helper.index('account.can_continue()'))
+        self.assertIn('restricted child NOT_ATTEMPTED', helper)
+        driver = (ROOT / 'native/windows-sandbox/examples/minimal_load_comparison/windows.rs').read_text()
+        for required in ['minimal-load-account-control.json', 'account_observation.as_ref().is_ok_and(|r| !r.preloaded)',
+                         'process-creation API', 'fixed ordinary-first order', 'RESULT_UNAVAILABLE']:
+            self.assertIn(required, driver)
 
     def test_dedicated_workflow_and_mitigations(self):
         source = (ROOT / '.github/workflows/windows-minimal-load.yml').read_text()

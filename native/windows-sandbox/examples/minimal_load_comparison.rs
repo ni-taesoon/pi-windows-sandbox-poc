@@ -1,7 +1,7 @@
 //! Fixed, diagnostic-only DLL loading comparison. Never a production fallback.
 #[path = "minimal_load_comparison/output.rs"]
 mod output;
-#[cfg(windows)]
+#[cfg(all(windows, feature = "lab-minimal-load-comparison"))]
 #[path = "minimal_load_comparison/windows.rs"]
 mod windows;
 
