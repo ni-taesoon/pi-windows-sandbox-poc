@@ -48,6 +48,10 @@ fn serialized_telemetry_contains_no_names_descriptors_or_identity_values() {
 #[test]
 fn diagnostics_are_reported_before_workload_and_share_original_deadline() {
     let helper = BROKER.split("pub fn helper_main(").nth(1).unwrap();
+    // Only the non-lab branch includes diagnostics. The optional fixed pinned
+    // comparison has its own early-return path and no diagnostic frames.
+    let helper = helper.split("#[cfg(not(feature = \"lab-minimal-load-comparison\"))]")
+        .nth(1).unwrap();
     assert!(
         helper.find("startup_diagnostics::inspect").unwrap()
             < helper.find("process::run_restricted_with_parent").unwrap()
@@ -56,11 +60,15 @@ fn diagnostics_are_reported_before_workload_and_share_original_deadline() {
         helper.find("&startup_diagnostics,").unwrap()
             < helper.find("process::run_restricted_with_parent").unwrap()
     );
-    // The existing telemetry/result suffix still has its original three receives.
-    // The distinct feature-only fixed comparison adds one account-control frame.
+    // Two telemetry sites plus two mutually exclusive source spellings of the
+    // normal result receive. Only one result receive exists in a compiled mode.
+    // The fixed comparisons add one shared ordinary-account frame site.
     let original = BROKER.split("// This feature omits only observational telemetry").nth(1).unwrap();
-    assert_eq!(original.matches(".receive(response_deadline)").count(), 3);
-    assert_eq!(BROKER.matches(".receive(response_deadline)").count(), 4);
+    assert_eq!(original.matches(".receive(response_deadline)").count(), 4);
+    assert_eq!(BROKER.matches(".receive(response_deadline)").count(), 5);
+    // The new mode separately consumes strict then pinned frames and sends an
+    // acknowledgement; it does not receive the normal result afterward.
+    assert_eq!(BROKER.matches("pipe.receive(deadline)").count(), 2);
     assert!(BROKER.contains("HelperExecution::Restricted => Duration::from_millis(u64::from(payload.request.timeout_ms))"));
     assert!(BROKER.contains("helper_startup_access={}"));
 }

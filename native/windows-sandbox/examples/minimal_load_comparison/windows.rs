@@ -18,6 +18,8 @@ use windows_sys::Win32::{
     Security::Cryptography::*, Security::*, Storage::FileSystem::*,
     System::Threading::GetCurrentProcessId,
 };
+#[cfg(feature = "lab-pinned-codex-token-comparison")]
+use pi_windows_sandbox::minimal_load::PinnedTokenFrame;
 const ROOT: &str = r"C:\PiSandboxLab";
 fn path(name: &str) -> PathBuf { Path::new(ROOT).join(name) }
 unsafe fn user_sid_bytes(t: isize) -> Result<Vec<u8>> {
@@ -73,7 +75,7 @@ fn fresh_write(p: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-// Retained handles deny write/delete sharing through all three fresh-process runs.
+// Retained handles deny write/delete sharing through every fixed fresh-process run.
 // Only fixed trusted inputs are read. The target OS DLL is never inspected/copied.
 fn pin_file(p: &Path, pins: &mut Vec<File>, digest: &mut BTreeMap<String, String>) -> Result<()> {
     let metadata = std::fs::symlink_metadata(p)?;
@@ -218,6 +220,29 @@ fn account_run(attempt: Option<&AccountControlAttempt>) -> Result<RunResult> {
         None => Err(anyhow::anyhow!("account control result unavailable")),
     }
 }
+#[cfg(feature = "lab-pinned-codex-token-comparison")]
+fn record_pinned_frame(frame: &PinnedTokenFrame, pinned: &mut Option<AccountControlAttempt>) -> Result<()> {
+    let (name, attempt, strict) = match frame {
+        PinnedTokenFrame::UnchangedStrict { attempt } => ("minimal-load-strict-control.json", attempt, true),
+        PinnedTokenFrame::PinnedCodexToken { attempt } => {
+            *pinned = Some(attempt.clone());
+            ("minimal-load-pinned-codex-control.json", attempt, false)
+        }
+    };
+    let run = account_run(Some(attempt));
+    let observed = observation(&run);
+    fresh_write(&path("trusted").join(name), &serde_json::to_vec_pretty(&serde_json::json!({
+        "diagnosticOnly":true, "nativeValidated":false, "normalValidationEligible":false,
+        "pythonValidationEligible":false, "frame":frame,
+        "observation":observed.as_ref().ok(),
+        "observationError":observed.as_ref().err().map(|e|format!("{e:#}")),
+        "pinnedAttemptAtCapture":if strict { "NOT_STARTED" } else { "RECORDED" }
+    }))?)?;
+    // Persist first, then withhold permission to proceed on malformed or missing
+    // strict output. LoadLibrary failure 1114 is valid evidence, not a retry cue.
+    if strict { observed.context("strict observation invalid; pinned-token child NOT_ATTEMPTED")?; }
+    Ok(())
+}
 fn run_comparison(owner: &str, req: RunRequest, inputs: &BTreeMap<String, String>, pins: &mut Vec<File>) -> Result<()> {
     // Validate before the owner control or any dedicated-account process starts.
     let fixed_request = FixedLoadRequest::new(req.clone())?;
@@ -248,9 +273,7 @@ fn run_comparison(owner: &str, req: RunRequest, inputs: &BTreeMap<String, String
         "control cleanup unverified; sandbox not launched");
     network::verify_offline_protection(&account_sid)?;
     let mut account_attempt = None;
-    let sandbox = unsafe { broker::run_fixed_minimal_load_comparison(
-        &path("store"), &path(r"trusted\pi-windows-sandbox.exe"), fixed_request,
-        &mut |attempt| {
+    let mut record_account = |attempt: &AccountControlAttempt| -> Result<()> {
             account_attempt = Some(attempt.clone());
             let run = account_run(Some(attempt));
             let observed = observation(&run);
@@ -259,12 +282,27 @@ fn run_comparison(owner: &str, req: RunRequest, inputs: &BTreeMap<String, String
                     "attempt":attempt, "observation":observed.as_ref().ok(),
                     "observationError":observed.as_ref().err().map(|e|format!("{e:#}")),
                     "restrictedAttemptAtCapture":if attempt.can_continue() { "RESULT_PENDING" } else { "NOT_ATTEMPTED" }}))?)
-        }) };
+        };
+    #[cfg(not(feature = "lab-pinned-codex-token-comparison"))]
+    let sandbox = unsafe { broker::run_fixed_minimal_load_comparison(
+        &path("store"), &path(r"trusted\pi-windows-sandbox.exe"), fixed_request,
+        &mut record_account) };
+    #[cfg(feature = "lab-pinned-codex-token-comparison")]
+    let mut pinned_attempt = None;
+    #[cfg(feature = "lab-pinned-codex-token-comparison")]
+    let sandbox = unsafe { broker::run_fixed_pinned_codex_token_comparison(
+        &path("store"), &path(r"trusted\pi-windows-sandbox.exe"), fixed_request,
+        &mut record_account, &mut |frame| record_pinned_frame(frame, &mut pinned_attempt)) };
     let account = account_run(account_attempt.as_ref());
     let account_observation = observation(&account);
     let sandbox_observation = observation(&sandbox);
     let complete = control_observation.is_ok() && account_observation.is_ok() && sandbox_observation.is_ok();
-    let evidence = serde_json::json!({
+    #[cfg(feature = "lab-pinned-codex-token-comparison")]
+    let pinned_observation = observation(&account_run(pinned_attempt.as_ref()));
+    #[cfg(feature = "lab-pinned-codex-token-comparison")]
+    let complete = complete && pinned_observation.is_ok();
+    #[allow(unused_mut)]
+    let mut evidence = serde_json::json!({
         "schemaVersion":1, "scope":"LAB_ONLY", "diagnosticOnly":true,
         "status":if complete { "LOAD_OBSERVATIONS_RECORDED" } else { "INCOMPLETE" },
         "nativeValidated":false, "normalValidationEligible":false, "pythonValidationEligible":false,
@@ -298,6 +336,37 @@ fn run_comparison(owner: &str, req: RunRequest, inputs: &BTreeMap<String, String
             "failure of both dedicated runs does not identify the account alone; common desktop/policy/profile/session remain",
             "no independent target token/job observation", "no traffic enforcement test"]
     });
+    #[cfg(feature = "lab-pinned-codex-token-comparison")]
+    {
+        evidence["schemaVersion"] = serde_json::json!(2);
+        evidence["scope"] = serde_json::json!("LAB_PINNED_CODEX_TOKEN_COMPARISON");
+        evidence["dedicatedComparisonDesign"]["order"] = serde_json::json!(
+            ["accountControl", "sandbox", "pinnedCodexToken"]);
+        evidence["pinnedCodexToken"] = serde_json::json!({
+            "attempt":pinned_attempt,
+            "observation":pinned_observation.as_ref().ok(),
+            "observationError":pinned_observation.as_ref().err().map(|e|format!("{e:#}")),
+            "upstreamCommit":"a956835d020762cb2b570053af06f643a11c0ecc",
+            "scope":"token construction and default object DACL only; not full upstream runner",
+            "constructor":"create_workspace_write_token_with_caps_and_user_from",
+            "base":"original authenticated dedicated-helper token",
+            "restrictingPrincipals":["same per-launch capability", "dedicated account user", "same helper logon", "Everyone"],
+            "additionalProxySid":false,
+            "defaultObjectDacl":["same helper logon: GENERIC_ALL", "OWNER RIGHTS: READ_CONTROL"],
+            "processCreation":"same CreateProcessAsUserW path as unchanged strict condition",
+            "globalOrDeviceAclChanges":false, "newPrivileges":false, "networkChanges":false,
+            "strictEvidenceAcknowledgementRequired":true,
+            "independentTargetTokenObservation":false,
+            "isolationValidated":false,
+            "risk":"existing user, logon or Everyone grants may permit writes outside writableRoots without a capability ACE",
+            "interpretation":"a successful DLL load is not Python validation or proof of isolation; no production policy change"
+        });
+        evidence["freshLoadComparisonEligible"] = serde_json::json!(
+            evidence["freshLoadComparisonEligible"] == true
+                && pinned_observation.as_ref().is_ok_and(|r| !r.preloaded));
+        evidence["limitations"].as_array_mut().context("comparison limitations missing")?.push(
+            serde_json::json!("strict versus pinned changes the complete token/default-DACL bundle; individual SID cause is not identified; fixed order and shared state remain confounds"));
+    }
     fresh_write(&path(r"trusted\minimal-load-run.json"), &serde_json::to_vec_pretty(&evidence)?)?;
     ensure!(complete, "one or more DLL-load observations unavailable; retain per-process result");
     Ok(())
@@ -336,7 +405,7 @@ pub fn main() -> Result<()> {
     let owner = owner()?;
     if args[0] == "disable" { return setup::disable_offline_account(&path("store"), &owner); }
     if args[0] == "setup" { return execute(&owner, "setup"); }
-    // Account shutdown encloses every run-mode input check and all three process attempts.
+    // Account shutdown encloses every run-mode input check and all fixed process attempts.
     let run = execute(&owner, "run");
     let disable = setup::disable_offline_account(&path("store"), &owner);
     let recovery = serde_json::json!({"runError":run.as_ref().err().map(|e|format!("{e:#}")),

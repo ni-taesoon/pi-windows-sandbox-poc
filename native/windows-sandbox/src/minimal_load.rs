@@ -56,3 +56,35 @@ impl AccountControlAttempt {
             && !run.timed_out && !run.truncated)
     }
 }
+
+/// Exact additional lab conditions, never a caller-selected token policy.
+#[cfg(feature = "lab-pinned-codex-token-comparison")]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "condition", rename_all = "SCREAMING_SNAKE_CASE", deny_unknown_fields)]
+pub enum PinnedTokenFrame {
+    UnchangedStrict { attempt: AccountControlAttempt },
+    PinnedCodexToken { attempt: AccountControlAttempt },
+}
+#[cfg(feature = "lab-pinned-codex-token-comparison")]
+impl PinnedTokenFrame {
+    pub fn expect_unchanged_strict(&self) -> Result<&AccountControlAttempt> {
+        match self {
+            Self::UnchangedStrict { attempt } => Ok(attempt),
+            _ => anyhow::bail!("unexpected pinned-token frame order"),
+        }
+    }
+    pub fn expect_pinned_codex_token(&self) -> Result<&AccountControlAttempt> {
+        match self {
+            Self::PinnedCodexToken { attempt } => Ok(attempt),
+            _ => anyhow::bail!("unexpected pinned-token frame order"),
+        }
+    }
+}
+
+/// Sent only after the owner has durably recorded a complete strict observation.
+/// A failed/missing acknowledgement never permits the extra child to start.
+#[cfg(feature = "lab-pinned-codex-token-comparison")]
+#[derive(Debug, Deserialize, Serialize)]
+pub enum PinnedTokenReady {
+    StrictEvidenceRecorded,
+}

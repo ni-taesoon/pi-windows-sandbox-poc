@@ -179,7 +179,8 @@ class SourceContracts(unittest.TestCase):
         self.assertNotIn('.wait()', source)
         self.assertNotIn('.join()', source)
         self.assertIn('recv_timeout(Duration::from_secs(2))', source)
-        self.assertEqual(source.count('"freshLoadComparisonEligible"'), 1)
+        # The optional pinned condition can only narrow the original eligibility.
+        self.assertEqual(source.count('"freshLoadComparisonEligible"'), 3)
         setup_body = source[source.index('fn execute('):]
         for run_only in ['control_observation', 'account_observation', 'sandbox_observation', 'freshLoadComparisonEligible']:
             self.assertNotIn(run_only, setup_body)
@@ -196,7 +197,7 @@ class SourceContracts(unittest.TestCase):
         self.assertIn('#[cfg(all(windows, feature = "lab-minimal-load-comparison"))]', entry)
         self.assertIn('internal-fixed-minimal-load-helper', entry)
         self.assertIn('pub struct FixedLoadRequest(RunRequest);', contract)
-        self.assertEqual(broker.count('FixedLoadRequest::new(request.clone())?'), 2)
+        self.assertEqual(broker.count('FixedLoadRequest::new(request.clone())?'), 3)
         self.assertIn('FixedLoadRequest::new(request.clone())?', process)
         self.assertIn('run_impl(ChildLaunch::FixedAccountControl', process)
         self.assertIn('#[cfg(feature = "lab-minimal-load-comparison")]\n    FixedAccountControl,', process)

@@ -28,6 +28,18 @@ fn main() {
         }
         return;
     }
+    #[cfg(all(windows, feature = "lab-pinned-codex-token-comparison"))]
+    if args.first().is_some_and(|arg| arg == "internal-fixed-pinned-codex-token-helper") {
+        let result = (|| -> anyhow::Result<()> {
+            anyhow::ensure!(args.len() == 3, "invalid fixed pinned-token helper arguments");
+            pi_windows_sandbox::broker::fixed_pinned_codex_token_helper_main(&args[1], args[2].parse()?)
+        })();
+        if let Err(error) = result {
+            eprintln!("fixed pinned-token helper failed: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if args == ["status"] {
         println!(
             "{}",
