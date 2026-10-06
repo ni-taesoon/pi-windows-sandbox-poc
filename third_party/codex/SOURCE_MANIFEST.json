@@ -69,7 +69,7 @@
       "destination": "native/windows-sandbox/src/network.rs",
       "upstream": [],
       "origin": "new product integration source",
-      "adapted_sha256": "c215d5851cd4bf47800f104fc114b894ef9521779090fffe7dbd1a396e030bd4"
+      "adapted_sha256": "ef548c44b516e838b8fa8c6a4d64035df0b574e55e17f0cec7a719f90bb7fd96"
     },
     {
       "destination": "native/windows-sandbox/src/network/firewall.rs",
@@ -79,7 +79,7 @@
           "sha256": "798143ed6115dadd36ba35cc3edf6beb94def870269e954a8a01dc74a3c23306"
         }
       ],
-      "adapted_sha256": "c92c6c9f49708349d17e4bc473151dadd0f82dc5cd5d7ce6812702669ec5cf8c"
+      "adapted_sha256": "ca5364770848493b93ccf8ab2b0d0c501244e04755c58f75d544c139c30139ca"
     },
     {
       "destination": "native/windows-sandbox/src/network/wfp.rs",
@@ -89,7 +89,7 @@
           "sha256": "82effcda9c951ad62d1f1b4afa9b4f0ad59b3d35d7c2feab53a9b6838dd93fc4"
         }
       ],
-      "adapted_sha256": "e2623e15b0dbaf3a32e6e42237806b0eb09c2aa2efc185491d11b97537cdad6a"
+      "adapted_sha256": "ceb362c66d24237733ff06ccee58fb445135075ee2730093920a1a8bd9a249b8"
     },
     {
       "destination": "native/windows-sandbox/src/network/wfp/filter_specs.rs",
@@ -99,7 +99,7 @@
           "sha256": "11bef68565843485376f31dea62930d833c6b758ccc2a8613a8b1872a2a0e1f1"
         }
       ],
-      "adapted_sha256": "aff2d04c94cf26417f5e78ef2f600f786b51cc8ce9904cf98da31340a8dba464"
+      "adapted_sha256": "5eb47d814657e83cef878cf34c8cba6c6ac8dc9849e253f7ba89ebc52ae228ec"
     },
     {
       "destination": "native/windows-sandbox/src/policy_masks.rs",
@@ -295,13 +295,13 @@
       "destination": "native/windows-sandbox/src/python_isolation.rs",
       "upstream": [],
       "origin": "new default-off fixed Python acceptance laboratory source",
-      "adapted_sha256": "9554bd481a54f5ca5f3e99e6c4538c9f43e7717c0847bf943fc4c8ad47d496b6"
+      "adapted_sha256": "4f4698afb15235723c6095d7ae5d9b726374cfd9f1a7ccd3c49ceb78c377d558"
     },
     {
       "destination": "native/windows-sandbox/src/python_isolation/broker.rs",
       "upstream": [],
       "origin": "new default-off fixed Python acceptance laboratory source",
-      "adapted_sha256": "8f01fb2caa98dd04ba87482b7c3c0fa997b4750699efb56218a0ead556ed8c0a"
+      "adapted_sha256": "6e35a24a7fc6ac4213cd7e5fefe604793536a5722c9c1ac8cd9b8fe3b51c5698"
     },
     {
       "destination": "native/windows-sandbox/src/python_isolation/observer.rs",

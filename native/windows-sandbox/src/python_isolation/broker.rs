@@ -10,10 +10,11 @@ fn send<T: Serialize>(pipe: &Pipe, value: &T, deadline: Instant) -> Result<()> {
     ensure!(serde_json::to_vec(value)?.len() <= lab::MAX_FRAME, "Python frame bounds exceeded");
     pipe.send(value, deadline)
 }
-/// Run only the immutable suite in a freshly provisioned disposable offline lab.
+/// Run only the immutable suite in a freshly provisioned disposable lab.
+/// The separately compiled online profile has only its declared fixed relay exception.
 /// # Safety
 /// Caller must pin and authenticate the entire runtime/script/helper inventory and
-/// fixture ancestors, verify offline controls, and persist each frame before ACK.
+/// fixture ancestors, verify the compiled network controls, and persist each frame before ACK.
 /// No caller-selected token, executable, arguments, policy paths or network targets.
 pub unsafe fn run_fixed_python_acceptance(
     fixed: FixedRequest, record: &mut dyn FnMut(&Frame) -> Result<()>,
@@ -65,7 +66,7 @@ pub unsafe fn run_fixed_python_acceptance(
     #[cfg(feature="lab-python-logon-sid-comparison")]
     let mut recorded_cases=0usize;
     for case in Case::ALL {
-        let deadline = Instant::now() + Duration::from_secs(35);
+        let deadline = Instant::now() + Duration::from_secs(case.frame_deadline_seconds());
         let frame: Frame = receive(&pipe, deadline)?;
         ensure!(frame.case == case && frame.account_sid == helper.account_sid
             && frame.capability_sid == payload.capability_sid && frame.private_desktop == payload.private_desktop,
@@ -152,7 +153,9 @@ pub fn fixed_python_isolation_helper_main(name: &str, expected_broker: u32) -> R
                 match token::create_lab_policy_repair_token_from(base.raw(),cap.as_ptr()) {
                     Ok((raw,configuration)) => candidate=Some((Handle::from_raw(raw)?,configuration)),
                     Err(error) => {
-                        let frame=Frame {case,account_sid:account_sid.clone(),capability_sid:payload.capability_sid.clone(),
+                        let frame=Frame {
+                            #[cfg(feature="lab-python-online-pdf")]
+                            execution_window:None,case,account_sid:account_sid.clone(),capability_sid:payload.capability_sid.clone(),
                             private_desktop:payload.private_desktop.clone(),run:None,
                             launch_error:Some(format!("candidate token construction failed before launch: {error:#}")),
                             native:lab::NativeEvidence::default(),candidate_token:None,session_token:None,codex_token:None};
@@ -167,7 +170,9 @@ pub fn fixed_python_isolation_helper_main(name: &str, expected_broker: u32) -> R
                 match token::create_lab_logon_session_token_from(base.raw(),cap.as_ptr()) {
                     Ok((raw,config))=>session=Some((Handle::from_raw(raw)?,config)),
                     Err(error)=>{
-                        let frame=Frame {case,account_sid:account_sid.clone(),capability_sid:payload.capability_sid.clone(),
+                        let frame=Frame {
+                            #[cfg(feature="lab-python-online-pdf")]
+                            execution_window:None,case,account_sid:account_sid.clone(),capability_sid:payload.capability_sid.clone(),
                             private_desktop:payload.private_desktop.clone(),run:None,
                             launch_error:Some(format!("session token construction failed before launch: {error:#}")),
                             native:lab::NativeEvidence::default(),candidate_token:None,session_token:None,codex_token:None};
@@ -186,9 +191,15 @@ pub fn fixed_python_isolation_helper_main(name: &str, expected_broker: u32) -> R
             let launch_token=if case.candidate() {candidate.as_ref().context("candidate token missing")?.0.raw()} else {launch_token};
             #[cfg(feature="lab-python-logon-sid-comparison")]
             let launch_token=if case.session(){session.as_ref().context("session token missing")?.0.raw()}else{launch_token};
+            #[cfg(feature="lab-python-online-pdf")]
+            let started_unix_ms=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis().try_into()?;
             let result = crate::process::run_fixed_python(launch_token,
                 &payload.private_desktop, &fixed, &parent, &mut observer);
-            let frame = Frame { case, account_sid: account_sid.clone(), capability_sid: payload.capability_sid.clone(),
+            let frame = Frame {
+                #[cfg(feature="lab-python-online-pdf")]
+                execution_window:if case.online(){Some(lab::ExecutionWindow {started_unix_ms,
+                    finished_unix_ms:std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis().try_into()?})}else{None},
+                case, account_sid: account_sid.clone(), capability_sid: payload.capability_sid.clone(),
                 private_desktop: payload.private_desktop.clone(), launch_error: result.as_ref().err().map(|e| format!("{e:#}")),
                 run: result.ok(), native: observer.evidence,
                 codex_token: {

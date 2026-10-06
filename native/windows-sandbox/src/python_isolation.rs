@@ -8,6 +8,8 @@ pub const ROOT: &str = r"C:\PiSandboxLab";
 pub const CONHOST: &str = r"C:\Windows\System32\conhost.exe";
 pub const PYTHON: &str = r"C:\PiSandboxLab\runtime\python.exe";
 pub const SCRIPT: &str = r"C:\PiSandboxLab\trusted\python-isolation-fixture.py";
+pub const ONLINE_SCRIPT: &str = r"C:\PiSandboxLab\trusted\python-online-pdf-fixture.py";
+pub const PDF_DEPS: &str = r"C:\PiSandboxLab\work\pdf-deps";
 pub const WORK: &str = r"C:\PiSandboxLab\work";
 pub const OUTSIDE: &str = r"C:\PiSandboxLab\fixtures\outside-world";
 pub const OUTSIDE_PRIVATE: &str = r"C:\PiSandboxLab\fixtures\outside-private";
@@ -18,6 +20,10 @@ pub const MAX_FRAME: usize = 64 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Case { OrdinaryOutside,
+    #[cfg(feature="lab-python-online-pdf")]
+    OnlineInstall,
+    #[cfg(feature="lab-python-online-pdf")]
+    OnlinePdf,
     #[cfg(feature="lab-python-codex-policy-acceptance")]
     CodexBoundary,
     #[cfg(feature="lab-python-codex-policy-acceptance")]
@@ -41,9 +47,26 @@ pub enum Case { OrdinaryOutside,
     SessionChildTimeout,
 }
 impl Case {
-    #[cfg(feature="lab-python-codex-policy-acceptance")]
+    #[cfg(feature="lab-python-online-pdf")]
+    pub const ALL: [Self;7] = [Self::OrdinaryOutside,Self::CodexBoundary,Self::CodexFileOperations,
+        Self::CodexChildNormalExit,Self::CodexChildTimeout,Self::OnlineInstall,Self::OnlinePdf];
+    #[cfg(all(feature="lab-python-codex-policy-acceptance",not(feature="lab-python-online-pdf")))]
     pub const ALL: [Self;5] = [Self::OrdinaryOutside,Self::CodexBoundary,Self::CodexFileOperations,
         Self::CodexChildNormalExit,Self::CodexChildTimeout];
+    pub fn online(self) -> bool {
+        #[cfg(feature="lab-python-online-pdf")]
+        { matches!(self, Self::OnlineInstall | Self::OnlinePdf) }
+        #[cfg(not(feature="lab-python-online-pdf"))]
+        { false }
+    }
+    pub fn budget_ms(self) -> u32 {
+        #[cfg(feature="lab-python-online-pdf")]
+        match self { Self::OnlineInstall => return 120_000, Self::OnlinePdf => return 30_000, _ => {} }
+        if self.timeout() { 8000 } else { 15000 }
+    }
+    pub fn frame_deadline_seconds(self) -> u64 {
+        if self.online() {u64::from(self.budget_ms()) / 1000 + 20} else {35}
+    }
     pub fn initial() -> Self {
         #[cfg(feature="lab-python-codex-policy-acceptance")]
         { Self::CodexBoundary }
@@ -52,7 +75,7 @@ impl Case {
     }
     pub fn codex(self) -> bool {
         #[cfg(feature="lab-python-codex-policy-acceptance")]
-        { matches!(self,Self::CodexBoundary|Self::CodexFileOperations|Self::CodexChildNormalExit|Self::CodexChildTimeout) }
+        { self.online() || matches!(self,Self::CodexBoundary|Self::CodexFileOperations|Self::CodexChildNormalExit|Self::CodexChildTimeout) }
         #[cfg(not(feature="lab-python-codex-policy-acceptance"))]
         { false }
     }
@@ -77,6 +100,10 @@ impl Case {
         Self::CandidateBoundary,Self::CandidateChildNormalExit,Self::CandidateChildTimeout,
         Self::SessionBoundary,Self::SessionChildNormalExit,Self::SessionChildTimeout];
     pub fn name(self) -> &'static str { match self {
+        #[cfg(feature="lab-python-online-pdf")]
+        Self::OnlineInstall => "online-install",
+        #[cfg(feature="lab-python-online-pdf")]
+        Self::OnlinePdf => "online-pdf",
         #[cfg(feature="lab-python-codex-policy-acceptance")]
         Self::CodexBoundary => "codex-boundary",
         #[cfg(feature="lab-python-codex-policy-acceptance")]
@@ -125,7 +152,7 @@ impl Case {
         Self::SessionBoundary => true,
         _ => false,
     } }
-    pub fn descendant(self) -> bool { !self.boundary() && !self.file_operations() && self != Self::OrdinaryOutside }
+    pub fn descendant(self) -> bool { !self.boundary() && !self.file_operations() && !self.online() && self != Self::OrdinaryOutside }
     pub fn timeout(self) -> bool { match self {
         #[cfg(feature="lab-python-codex-policy-acceptance")]
         Self::CodexChildTimeout => true,
@@ -139,7 +166,8 @@ impl Case {
     pub fn label(self) -> &'static str { if self.codex() { "codex" } else if self.session() { "session" } else if self.candidate() { "candidate" } else if self.pinned() { "pinned" } else if self == Self::OrdinaryOutside { "ordinary" } else { "strict" } }
 }
 pub fn compiled_feature() -> &'static str {
-    if cfg!(feature="lab-python-codex-policy-acceptance") { "lab-python-codex-policy-acceptance" }
+    if cfg!(feature="lab-python-online-pdf") { "lab-python-online-pdf" }
+    else if cfg!(feature="lab-python-codex-policy-acceptance") { "lab-python-codex-policy-acceptance" }
     else if cfg!(feature="lab-python-logon-sid-comparison") { "lab-python-logon-sid-comparison" }
     else if cfg!(feature="lab-python-policy-repair-comparison") { "lab-python-policy-repair-comparison" }
     else { "lab-python-isolation-acceptance" }
@@ -210,10 +238,10 @@ impl CodexTokenConfiguration {
 pub fn fixed_policy() -> Policy { Policy { workspace: WORK.into(), writable_roots: vec![WORK.into()],
     deny_read: vec![format!(r"{WORK}\denied-read")], deny_write: vec![format!(r"{WORK}\denied-write")], network: "disabled".into() } }
 pub fn request(case: Case, parent_pid: u32, policy_hash: String) -> RunRequest { RunRequest {
-    schema_version: 1, argv: vec![PYTHON.into(), "-I".into(), "-S".into(), "-B".into(), SCRIPT.into(), case.name().into()],
+    schema_version: 1, argv: vec![PYTHON.into(), "-I".into(), "-S".into(), "-B".into(), (if case.online() {ONLINE_SCRIPT} else {SCRIPT}).into(), case.name().into()],
     cwd: WORK.into(), env: HashMap::from([("SystemRoot".into(), r"C:\Windows".into()),
         ("TEMP".into(), WORK.into()), ("TMP".into(), WORK.into())]), stdin: String::new(),
-    timeout_ms: if case.timeout() { 8000 } else { 15000 }, max_output_bytes: 16384,
+    timeout_ms: case.budget_ms(), max_output_bytes: 16384,
     parent_pid, policy_hash, policy: fixed_policy() } }
 pub struct FixedRequest { request: RunRequest, case: Case }
 impl FixedRequest {
@@ -300,6 +328,9 @@ pub struct NativeEvidence {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Frame {
+    #[cfg(feature="lab-python-online-pdf")]
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub execution_window: Option<ExecutionWindow>,
     pub case: Case, pub account_sid: String, pub capability_sid: String, pub private_desktop: String,
     pub run: Option<RunResult>, pub launch_error: Option<String>, pub native: NativeEvidence,
     #[serde(default,skip_serializing_if="Option::is_none")]
@@ -369,6 +400,12 @@ impl FileOperations {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ScriptEvidence {
+    #[cfg(feature="lab-python-online-pdf")]
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub online_install: Option<OnlineInstallEvidence>,
+    #[cfg(feature="lab-python-online-pdf")]
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub online_pdf: Option<OnlinePdfEvidence>,
     pub schema_version: u32, pub mode: Case, pub python: [u32; 3], pub marker: String,
     pub outside_read: Option<Probe>, pub outside_write: Option<Probe>,
     pub input_ok: Option<bool>, pub output_ok: Option<bool>,
@@ -407,11 +444,13 @@ pub fn parse_script(frame: &Frame) -> Result<ScriptEvidence> {
     if frame.case.codex() && frame.case.boundary() { ensure!(result.private_outside_write.is_some(),"private outside write probe missing"); }
     else { ensure!(result.private_outside_write.is_none(),"private outside probe outside fixed Codex boundary"); }
     ensure!(result.file_operations.is_some()==frame.case.file_operations(),"file operations outside fixed case or missing");
-    if frame.case.descendant() || frame.case.file_operations() {
+    if frame.case.descendant() || frame.case.file_operations() || frame.case.online() {
         ensure!(result.input_ok.is_none() && result.output_ok.is_none() && result.outside_read.is_none()
             && result.outside_write.is_none() && result.denied_read.is_none() && result.denied_write.is_none()
             && result.tcp4.is_none() && result.tcp6.is_none(), "descendant case exceeded fixed scope");
     }
+    #[cfg(feature="lab-python-online-pdf")]
+    validate_online_script(frame,&result)?;
     Ok(result)
 }
 pub fn native_valid(frame: &Frame) -> bool {
@@ -563,9 +602,10 @@ pub(crate) mod observer;
 pub fn codex_policy_acceptance(assessments:&[(Case,Assessment)],ordinary_ok:bool,suite_complete:bool,
     fixtures_verified:bool)->bool {
     cfg!(feature="lab-python-codex-policy-acceptance") && ordinary_ok && suite_complete && fixtures_verified
-        && assessments.len()==Case::ALL.len() && assessments.iter().map(|(c,_)|*c).eq(Case::ALL)
+        && assessments.iter().filter(|(c,_)|!c.online()).count()==5
+        && assessments.iter().filter(|(c,_)|!c.online()).map(|(c,_)|*c).eq(Case::ALL.into_iter().filter(|c|!c.online()))
         && !any_policy_boundary_failure(assessments)
-        && assessments.iter().filter(|(c,_)|c.codex()).all(|(case,a)|a.python_success && a.identity==Verdict::ObservedPass
+        && assessments.iter().filter(|(c,_)|c.codex() && !c.online()).all(|(case,a)|a.python_success && a.identity==Verdict::ObservedPass
             && a.desktop!=Verdict::PolicyBoundaryFail && if case.boundary() {
                 matches!(a.outside_write,Verdict::KnownExceptionObserved|Verdict::ObservedPass)
                 && a.broad_read_truth==Verdict::ObservedPass && a.explicit_denies==Verdict::ObservedPass
@@ -576,3 +616,86 @@ pub fn codex_policy_acceptance(assessments:&[(Case,Assessment)],ordinary_ok:bool
 #[cfg(all(windows,feature="lab-python-codex-policy-acceptance"))]
 #[path="python_isolation/codex_fixtures.rs"]
 pub mod codex_fixtures;
+
+#[cfg(feature="lab-python-online-pdf")]
+#[derive(Debug,Clone,Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub struct ExecutionWindow {pub started_unix_ms:u64,pub finished_unix_ms:u64}
+#[cfg(feature="lab-python-online-pdf")]
+#[derive(Debug,Clone,Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub struct InstalledPackage {pub name:String,pub version:String}
+#[cfg(feature="lab-python-online-pdf")]
+#[derive(Debug,Clone,Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub struct OnlineInstallEvidence {
+    pub started_unix_ms:u64,pub finished_unix_ms:u64,pub pip_exit_code:i32,
+    pub target:String,pub report_path:String,pub target_was_fresh:bool,pub report_verified:bool,
+    pub installed:Vec<InstalledPackage>,pub module_origins:std::collections::BTreeMap<String,String>,
+    pub pip_output:String,pub pip_output_truncated:bool,
+}
+#[cfg(feature="lab-python-online-pdf")]
+#[derive(Debug,Clone,Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub struct OnlinePdfEvidence {
+    pub path:String,pub byte_count:u64,pub sha256:String,pub page_count:u32,pub expected_text:String,
+    pub page_compression:u32,pub invariant:bool,pub installed:Vec<InstalledPackage>,
+    pub module_origins:std::collections::BTreeMap<String,String>,
+}
+#[cfg(feature="lab-python-online-pdf")]
+pub const PACKAGE_PINS:[(&str,&str,&str,&str,u64);3]=[
+    ("reportlab","5.0.1","reportlab-5.0.1-py3-none-any.whl","1c36e6bb0e71780c72331eba60da7f602e8d4389a8723825af71342e49d791e8",1957258),
+    ("pillow","12.3.0","pillow-12.3.0-cp312-cp312-win_amd64.whl","a2b55dd6b2a4c4b7d87ffa56bdb33fdc5fdb9a462173861a7bc097f17d91cb09",7227137),
+    ("charset-normalizer","3.5.2","charset_normalizer-3.5.2-py3-none-any.whl","b6b751274acb69d77b3323d6b7dbaa3c7fdfc1eb829b7eb61d262f32e1af9685",68872),
+];
+#[cfg(feature="lab-python-online-pdf")]
+fn online_imports_valid(installed:&[InstalledPackage],origins:&std::collections::BTreeMap<String,String>)->bool {
+    let mut actual=installed.iter().map(|p|(p.name.as_str(),p.version.as_str())).collect::<Vec<_>>();actual.sort();
+    let mut expected=PACKAGE_PINS.iter().map(|p|(p.0,p.1)).collect::<Vec<_>>();expected.sort();
+    let prefix=format!("{}\\",PDF_DEPS.to_ascii_lowercase());
+    actual==expected && origins.len()==4 && ["reportlab","PIL","PIL._imaging","charset_normalizer"].iter().all(|name|
+        origins.get(*name).is_some_and(|value| {
+            let normalized=value.replace('/',"\\").to_ascii_lowercase();
+            normalized.starts_with(&prefix) && !normalized.split('\\').any(|part|part==".." || part==".")
+                && (*name!="PIL._imaging" || normalized.ends_with(".pyd"))
+        }))
+}
+#[cfg(feature="lab-python-online-pdf")]
+fn validate_online_script(frame:&Frame,result:&ScriptEvidence)->Result<()> {
+    ensure!(result.online_install.is_some()==(frame.case==Case::OnlineInstall)
+        && result.online_pdf.is_some()==(frame.case==Case::OnlinePdf),"online evidence outside fixed case or missing");
+    ensure!(frame.execution_window.is_some()==frame.case.online(),"online execution timing missing or outside fixed case");
+    if !frame.case.online(){return Ok(());}
+    let window=frame.execution_window.as_ref().unwrap();
+    ensure!(window.started_unix_ms>0 && window.started_unix_ms<=window.finished_unix_ms
+        && window.finished_unix_ms-window.started_unix_ms <= u64::from(frame.case.budget_ms())+15_000,
+        "invalid bounded execution timing");
+    if let Some(install)=&result.online_install {
+        ensure!(install.pip_exit_code==0 && install.target==PDF_DEPS
+            && install.report_path==r"C:\PiSandboxLab\work\pdf-install-report.json"
+            && install.target_was_fresh && install.report_verified
+            && online_imports_valid(&install.installed,&install.module_origins)
+            && install.started_unix_ms>=window.started_unix_ms && install.finished_unix_ms<=window.finished_unix_ms
+            && install.started_unix_ms<=install.finished_unix_ms && install.pip_output.len()<=8192,
+            "online install evidence incomplete or mismatched");
+    }
+    if let Some(pdf)=&result.online_pdf {
+        ensure!(pdf.path==r"C:\PiSandboxLab\work\sandbox-test.pdf" && (512..=65536).contains(&pdf.byte_count)
+            && pdf.sha256.len()==64 && pdf.sha256.bytes().all(|b|b.is_ascii_hexdigit()) && pdf.page_count==1
+            && pdf.expected_text=="Sandbox PDF test" && pdf.page_compression==0 && pdf.invariant
+            && online_imports_valid(&pdf.installed,&pdf.module_origins),"fixed PDF evidence incomplete or mismatched");
+    }
+    Ok(())
+}
+/// Separate opt-in outcome: all five previous controls plus actual in-frame
+/// upstream fetches, sandbox installation, host structural PDF proof and cleanup.
+#[cfg(feature="lab-python-online-pdf")]
+pub fn online_pdf_acceptance(assessments:&[(Case,Assessment)],codex_core:bool,suite_complete:bool,
+    online_fetch_verified:bool,install_artifacts_verified:bool,pdf_artifacts_verified:bool,relay_cleanup_verified:bool)->bool {
+    codex_core && suite_complete && assessments.len()==7
+        && assessments.iter().map(|(c,_)|*c).eq(Case::ALL)
+        && online_fetch_verified && install_artifacts_verified && pdf_artifacts_verified && relay_cleanup_verified
+        && assessments.iter().filter(|(case,_)|case.online()).all(|(_,a)|a.python_success
+            && a.identity==Verdict::ObservedPass && a.desktop!=Verdict::PolicyBoundaryFail)
+        && !any_policy_boundary_failure(assessments)
+}

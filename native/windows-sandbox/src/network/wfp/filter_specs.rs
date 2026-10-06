@@ -16,6 +16,12 @@ pub(super) enum ConditionSpec {
     User,
     Protocol(u8),
     RemotePort(u16),
+    #[cfg(feature = "lab-python-online-pdf")]
+    RemoteAddressV4Not(u32),
+    #[cfg(feature = "lab-python-online-pdf")]
+    ProtocolNot(u8),
+    #[cfg(feature = "lab-python-online-pdf")]
+    RemotePortNot(u16),
 }
 
 #[derive(Clone, Copy)]
@@ -128,7 +134,7 @@ pub(super) const FILTER_SPECS: &[FilterSpec] = &[
     },
     // Disposable-lab comparison only. A required ALE_USER_ID condition scopes
     // all outbound connects (including loopback) to the owned local account.
-    #[cfg(any(feature = "lab-python-policy-repair-comparison", feature = "lab-python-codex-policy-acceptance"))]
+    #[cfg(all(not(feature = "lab-python-online-pdf"), any(feature = "lab-python-policy-repair-comparison", feature = "lab-python-codex-policy-acceptance")))]
     FilterSpec {
         key: GUID::from_u128(0xef7656ccacb451bcb3ad27be82cb009a),
         name: "pi_sandbox_wfp_offline_connect_v4",
@@ -143,5 +149,35 @@ pub(super) const FILTER_SPECS: &[FilterSpec] = &[
         description: "Block sandbox-account outbound connect v6 (lab comparison)",
         layer_key: FWPM_LAYER_ALE_AUTH_CONNECT_V6,
         conditions: &[ConditionSpec::User],
+    },
+    // The online profile has NO permit/override filter. The union of these
+    // three user-scoped blocks is the complement of the single relay tuple.
+    // Every IPv6 connect remains covered by the original account-only block.
+    #[cfg(feature = "lab-python-online-pdf")]
+    FilterSpec {
+        key: GUID::from_u128(0x4627aa81d7235ea982f4f277f26a3d2b),
+        name: "pi_sandbox_wfp_online_pdf_not_relay_address_v4",
+        description: "Block sandbox-account v4 outside fixed online PyPI relay address",
+        layer_key: FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+        conditions: &[
+            ConditionSpec::User,
+            ConditionSpec::RemoteAddressV4Not(0x7f000001),
+        ],
+    },
+    #[cfg(feature = "lab-python-online-pdf")]
+    FilterSpec {
+        key: GUID::from_u128(0x0b6d9a1f41265a698c9c60a6040d9f42),
+        name: "pi_sandbox_wfp_online_pdf_not_tcp_v4",
+        description: "Block sandbox-account v4 outside fixed online PyPI relay TCP",
+        layer_key: FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+        conditions: &[ConditionSpec::User, ConditionSpec::ProtocolNot(6)],
+    },
+    #[cfg(feature = "lab-python-online-pdf")]
+    FilterSpec {
+        key: GUID::from_u128(0x78f5d091c6135d34a8b178068f1372a7),
+        name: "pi_sandbox_wfp_online_pdf_not_relay_port_v4",
+        description: "Block sandbox-account v4 outside fixed online PyPI relay port",
+        layer_key: FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+        conditions: &[ConditionSpec::User, ConditionSpec::RemotePortNot(43873)],
     },
 ];

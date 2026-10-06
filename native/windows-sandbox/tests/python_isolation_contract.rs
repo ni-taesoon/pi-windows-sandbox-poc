@@ -2,12 +2,18 @@
 use pi_windows_sandbox::{python_isolation::*, protocol::{RunResult,StopReason}};
 use base64::Engine;
 fn frame(case: Case) -> Frame {
-    let s = ScriptEvidence { schema_version:1, mode:case, python:[3,12,10], marker:"PYTHON_ISOLATION_OK".into(),
+    let s = ScriptEvidence {
+        #[cfg(feature="lab-python-online-pdf")]
+        online_install:None,
+        #[cfg(feature="lab-python-online-pdf")]
+        online_pdf:None, schema_version:1, mode:case, python:[3,12,10], marker:"PYTHON_ISOLATION_OK".into(),
         outside_read:Some(Probe::Success),outside_write:Some(Probe::PermissionDenied { winerror:Some(5), errno:None, error_type:None }),
         input_ok:Some(true),output_ok:Some(true),denied_read:Some(Probe::PermissionDenied { winerror:Some(5), errno:None, error_type:None }),
         denied_write:Some(Probe::PermissionDenied { winerror:Some(5), errno:None, error_type:None }),tcp4:Some(Probe::PermissionDenied { winerror:Some(10013), errno:None, error_type:None }),
         tcp6:Some(Probe::PermissionDenied { winerror:Some(10013), errno:None, error_type:None }),session_grant_write:None,private_outside_write:None,file_operations:None };
-    let mut f = Frame { case, account_sid:"S-1-5-21-1-2-3-1001".into(),capability_sid:"S-1-5-21-4-5-6-7".into(),
+    let mut f = Frame {
+        #[cfg(feature="lab-python-online-pdf")]
+        execution_window:None, case, account_sid:"S-1-5-21-1-2-3-1001".into(),capability_sid:"S-1-5-21-4-5-6-7".into(),
         private_desktop:"Winsta0\\PiSandboxDesktop-0123456789abcdef0123456789abcdef".into(),
         run:Some(RunResult {kind:"result".into(),exit_code:0,stdout_base64:String::new(),stderr_base64:String::new(),
             stop_reason:StopReason::Exited,timed_out:false,truncated:false,terminated:true,cleanup_verified:true}),
@@ -391,7 +397,7 @@ fn passing_file_operations()->FileOperations {FileOperations {
     protected_file_rename:denied_mutation(),protected_file_delete:denied_mutation(),
     protected_dir_write:denied_mutation(),protected_dir_rename:denied_mutation(),protected_dir_delete:denied_mutation(),
 }}
-#[cfg(feature="lab-python-codex-policy-acceptance")]
+#[cfg(all(feature="lab-python-codex-policy-acceptance",not(feature="lab-python-online-pdf")))]
 #[test] fn codex_profile_is_exactly_five_cases_and_rejects_old_suite_requests() {
     assert_eq!(Case::ALL.map(Case::name),["ordinary-outside","codex-boundary","codex-file-operations",
         "codex-child-normal-exit","codex-child-timeout"]);
@@ -407,7 +413,7 @@ fn passing_file_operations()->FileOperations {FileOperations {
 }
 #[cfg(feature="lab-python-codex-policy-acceptance")]
 #[test] fn codex_known_world_exception_can_pass_declared_contract_but_not_absolute_gate() {
-    let values=Case::ALL.map(|case|(case,assess(&codex_frame(case),true,true,true)));
+    let values=Case::ALL.into_iter().filter(|case|!case.online()).map(|case|(case,assess(&codex_frame(case),true,true,true))).collect::<Vec<_>>();
     let boundary=&values[1].1;
     assert_eq!(boundary.outside_write,Verdict::KnownExceptionObserved);
     assert!(!boundary.full_pass);assert!(!pi_windows_sandbox::NATIVE_VALIDATED);
@@ -492,4 +498,107 @@ fn passing_file_operations()->FileOperations {FileOperations {
     assert!(driver.contains("artifact[actual]==*expected"));
     assert!(driver.contains("if identity_changed {artifact[\"protectedMutationObserved\"]"));
     assert!(driver.contains("durable Codex fixture receipt readback mismatch"));
+}
+
+#[cfg(feature="lab-python-online-pdf")]
+fn online_frame(case:Case)->Frame {
+    let mut f=codex_frame(case);
+    let bytes=base64::engine::general_purpose::STANDARD.decode(&f.run.as_ref().unwrap().stdout_base64).unwrap();
+    let mut script:ScriptEvidence=serde_json::from_slice(&bytes).unwrap();
+    let installed=PACKAGE_PINS.iter().map(|p|InstalledPackage {name:p.0.into(),version:p.1.into()}).collect();
+    let origins=std::collections::BTreeMap::from([
+        ("reportlab".into(),format!(r"{PDF_DEPS}\reportlab\__init__.py")),
+        ("PIL".into(),format!(r"{PDF_DEPS}\PIL\__init__.py")),
+        ("charset_normalizer".into(),format!(r"{PDF_DEPS}\charset_normalizer\__init__.py")),
+        ("PIL._imaging".into(),format!(r"{PDF_DEPS}\PIL\_imaging.cp312-win_amd64.pyd")),
+    ]);
+    f.execution_window=Some(ExecutionWindow {started_unix_ms:1_000_000,finished_unix_ms:1_005_000});
+    if case==Case::OnlineInstall {
+        script.online_install=Some(OnlineInstallEvidence {started_unix_ms:1_000_100,finished_unix_ms:1_004_900,
+            pip_exit_code:0,target:PDF_DEPS.into(),report_path:r"C:\PiSandboxLab\work\pdf-install-report.json".into(),
+            target_was_fresh:true,report_verified:true,installed,module_origins:origins,pip_output:"mock only".into(),
+            pip_output_truncated:false});
+    } else {
+        script.online_pdf=Some(OnlinePdfEvidence {path:r"C:\PiSandboxLab\work\sandbox-test.pdf".into(),byte_count:1500,
+            sha256:"a".repeat(64),page_count:1,expected_text:"Sandbox PDF test".into(),page_compression:0,invariant:true,
+            installed,module_origins:origins});
+    }
+    set_script(&mut f,&script);f
+}
+#[cfg(feature="lab-python-online-pdf")]
+#[test] fn online_profile_appends_only_two_immutable_original_token_cases() {
+    assert_eq!(Case::ALL.map(Case::name),["ordinary-outside","codex-boundary","codex-file-operations",
+        "codex-child-normal-exit","codex-child-timeout","online-install","online-pdf"]);
+    assert_eq!(compiled_feature(),"lab-python-online-pdf");
+    assert_eq!(Case::initial(),Case::CodexBoundary);
+    assert!(include_str!("../Cargo.toml").contains("lab-python-online-pdf = [\"lab-python-codex-policy-acceptance\"]"));
+    for (case,timeout,deadline) in [(Case::OnlineInstall,120000,140),(Case::OnlinePdf,30000,50)] {
+        assert!(case.codex());assert!(!case.descendant());assert!(!case.boundary());assert!(case.online());
+        let r=request(case,123,"0".repeat(64));assert_eq!(r.timeout_ms,timeout);assert_eq!(case.frame_deadline_seconds(),deadline);
+        assert_eq!(r.argv,[PYTHON,"-I","-S","-B",ONLINE_SCRIPT,case.name()]);
+        assert!(r.env.keys().all(|k|["SystemRoot","TEMP","TMP"].contains(&k.as_str())));
+        assert!(FixedRequest::new(r.clone()).is_ok());
+        let mut altered=r.clone();altered.argv[4]=SCRIPT.into();assert!(FixedRequest::new(altered).is_err());
+        let mut altered=r.clone();altered.argv.push("https://example.invalid/script.py".into());assert!(FixedRequest::new(altered).is_err());
+        let mut altered=r;altered.env.insert("PIP_INDEX_URL".into(),"https://example.invalid".into());assert!(FixedRequest::new(altered).is_err());
+        let frame=online_frame(case);assert!(parse_script(&frame).is_ok());assert!(native_valid(&frame));
+        assert!(!assess(&frame,false,true,true).full_pass);
+    }
+    assert_eq!(Case::CodexBoundary.budget_ms(),15000);assert_eq!(Case::CodexBoundary.frame_deadline_seconds(),35);
+    assert_eq!(Case::CodexChildTimeout.budget_ms(),8000);
+}
+#[cfg(feature="lab-python-online-pdf")]
+#[test] fn online_imports_reports_versions_timing_and_freshness_fail_closed() {
+    for change in 0..10 {
+        let mut f=online_frame(Case::OnlineInstall);let mut s=parse_script(&f).unwrap();let i=s.online_install.as_mut().unwrap();
+        match change {
+            0=>i.pip_exit_code=1,1=>i.target_was_fresh=false,2=>i.report_verified=false,
+            3=>i.installed[0].version="0.0.0".into(),4=>i.installed.push(i.installed[0].clone()),
+            5=>{i.module_origins.insert("PIL".into(),r"C:\PiSandboxLab\runtime\Lib\site-packages\PIL\__init__.py".into());},
+            6=>{i.module_origins.insert("PIL._imaging".into(),format!(r"{PDF_DEPS}\PIL\_imaging.py"));},
+            7=>i.started_unix_ms=999_999,8=>i.finished_unix_ms=1_005_001,
+            _=>{i.module_origins.insert("reportlab".into(),format!(r"{PDF_DEPS}\..\host\reportlab.py"));},
+        }
+        set_script(&mut f,&s);assert!(parse_script(&f).is_err(),"change {change}");
+    }
+    let mut f=online_frame(Case::OnlineInstall);f.execution_window=None;assert!(parse_script(&f).is_err());
+    let mut f=online_frame(Case::OnlineInstall);f.native.root.as_mut().unwrap().exact_job_member=false;
+    assert!(parse_script(&f).is_ok());assert!(!native_valid(&f));
+}
+#[cfg(feature="lab-python-online-pdf")]
+#[test] fn online_pdf_receipt_cannot_substitute_for_host_structural_and_fetch_evidence() {
+    let values=Case::ALL.map(|case|{
+        let f=if case.online(){online_frame(case)}else{codex_frame(case)};
+        (case,assess(&f,true,true,true))
+    });
+    let core=codex_policy_acceptance(&values,true,true,true);assert!(core);
+    assert!(online_pdf_acceptance(&values,core,true,true,true,true,true));
+    for missing in 0..6 {
+        let mut gates=[true;6];gates[missing]=false;
+        assert!(!online_pdf_acceptance(&values,gates[0],gates[1],gates[2],gates[3],gates[4],gates[5]));
+    }
+    let mut values=values;values[6].1.identity=Verdict::Inconclusive;
+    assert!(!online_pdf_acceptance(&values,true,true,true,true,true,true));
+    assert!(!online_pdf_acceptance(&values[..6],true,true,true,true,true,true));
+    for change in 0..6 {
+        let mut f=online_frame(Case::OnlinePdf);let mut s=parse_script(&f).unwrap();let p=s.online_pdf.as_mut().unwrap();
+        match change {0=>p.page_count=2,1=>p.expected_text="user document".into(),2=>p.byte_count=1,
+            3=>p.sha256="bad".into(),4=>p.invariant=false,_=>p.page_compression=1}
+        set_script(&mut f,&s);assert!(parse_script(&f).is_err());
+    }
+}
+#[cfg(feature="lab-python-online-pdf")]
+#[test] fn online_fixture_uses_public_pip_in_root_and_separate_isolated_pdf() {
+    let source=include_str!("../../../scripts/python-online-pdf-fixture.py");
+    for flag in ["--no-index","--require-hashes","--only-binary=:all:","--no-deps","--no-cache-dir",
+        "--no-compile","--disable-pip-version-check","--retries","--timeout","--target","--report"] {
+        assert!(source.contains(flag));
+    }
+    assert!(source.contains("runpy.run_module(\"pip\", run_name=\"__main__\", alter_sys=True)"));
+    assert!(source.contains("\"PIP_CONFIG_FILE\": os.devnull"));assert!(source.contains("os.environ.clear()"));
+    assert!(!source.contains("pip._internal"));assert!(!source.contains("subprocess"));
+    assert!(!source.contains("trusted-host"));assert!(!source.contains("CERT_NONE"));
+    assert!(source.contains("PDF.open(\"xb\")"));assert!(source.contains("\"PIL._imaging\""));
+    assert!(source.contains("pagesize=A4, pdfVersion=(1, 4), pageCompression=0, invariant=1"));
+    assert!(!include_str!("../../../scripts/python-isolation-fixture.py").contains("online-install"));
 }

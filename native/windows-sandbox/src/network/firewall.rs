@@ -122,16 +122,29 @@ fn offline_network_blocks(offline_sid: &str, log: &mut dyn Write, install: bool)
                 ))
             })?;
 
-            for (name, description, protocol) in [
+            // Original Codex proxy-port-complement shape, narrowed to ONE
+            // fixed relay port. The WFP complement additionally enforces exact
+            // 127.0.0.1/TCP and blocks every IPv6 connect. This is configured
+            // before Rules::Add; existing broad or different rules fail closed.
+            // Upstream a956835d020762cb2b570053af06f643a11c0ecc:
+            // setup_provisioning/firewall.rs:90-180,453-483.
+            let tcp_blocked_ports = if cfg!(feature = "lab-python-online-pdf") {
+                Some("1-43872,43874-65535")
+            } else {
+                None
+            };
+            for (name, description, protocol, remote_ports) in [
                 (
                     OFFLINE_BLOCK_LOOPBACK_TCP_RULE_NAME,
                     OFFLINE_BLOCK_LOOPBACK_TCP_RULE_FRIENDLY,
                     NET_FW_IP_PROTOCOL_TCP.0,
+                    tcp_blocked_ports,
                 ),
                 (
                     OFFLINE_BLOCK_LOOPBACK_UDP_RULE_NAME,
                     OFFLINE_BLOCK_LOOPBACK_UDP_RULE_FRIENDLY,
                     NET_FW_IP_PROTOCOL_UDP.0,
+                    None,
                 ),
             ] {
                 check_or_install_block_rule(
@@ -143,7 +156,7 @@ fn offline_network_blocks(offline_sid: &str, log: &mut dyn Write, install: bool)
                         protocol,
                         local_user_spec: &local_user_spec,
                         remote_addresses: Some(LOOPBACK_REMOTE_ADDRESSES),
-                        remote_ports: None,
+                        remote_ports,
                     },
                     log,
                     install,

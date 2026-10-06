@@ -1,3 +1,6 @@
+#[cfg(feature="lab-python-online-pdf")]
+#[path="online_pdf.rs"]
+mod online_pdf;
 use anyhow::{ensure, Context, Result};
 use pi_windows_sandbox::{acl, broker, network, process::Handle, setup, token, winutil,
     python_isolation::{self as lab, Assessment, Case, FixedRequest, Frame, Probe, Verdict}};
@@ -240,6 +243,11 @@ fn inputs() -> Result<(Vec<File>, BTreeMap<String,String>)> {
         "python-isolation-stage.json", "python-isolation-runtime-manifest.json"] {
         pin_file(&path("trusted").join(name), &mut pins, &mut digest)?;
     }
+    #[cfg(feature="lab-python-online-pdf")]
+    for name in ["python-online-pdf-fixture.py","python-online-pdf-relay.py",
+        "python-online-pdf-packages.json","python-online-pdf-requirements.txt"] {
+        pin_file(&path("trusted").join(name),&mut pins,&mut digest)?;
+    }
     let mut runtime = BTreeMap::new(); pin_runtime(&path("runtime"), &mut pins, &mut runtime, 0, &mut RuntimeBudget::default())?;
     let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(path(r"trusted\python-isolation-runtime-manifest.json"))?)?;
     ensure!(manifest["schemaVersion"] == 1 && manifest["pythonVersion"] == "3.12.10"
@@ -252,6 +260,13 @@ fn inputs() -> Result<(Vec<File>, BTreeMap<String,String>)> {
         ("helperSha256",r"trusted\pi-windows-sandbox.exe"), ("fixtureSha256",r"trusted\python-isolation-fixture.py"),
         ("pythonSha256",r"runtime\python.exe"), ("runtimeManifestSha256",r"trusted\python-isolation-runtime-manifest.json")] {
         ensure!(stage[key].as_str() == digest.get(&path(name).display().to_string()).map(String::as_str), "staged image hash mismatch: {key}");
+    }
+    #[cfg(feature="lab-python-online-pdf")]
+    for (key,name) in [("onlinePdfFixtureSha256","python-online-pdf-fixture.py"),
+        ("onlinePdfRelaySha256","python-online-pdf-relay.py"),("onlinePdfPackagesSha256","python-online-pdf-packages.json"),
+        ("onlinePdfRequirementsSha256","python-online-pdf-requirements.txt")] {
+        ensure!(stage[key].as_str()==digest.get(&path("trusted").join(name).display().to_string()).map(String::as_str),
+            "staged online input hash mismatch: {key}");
     }
     Ok((pins,digest))
 }
@@ -409,6 +424,8 @@ fn run_suite(owner: &str, digest: &BTreeMap<String,String>, pins: &mut Vec<File>
     let identity = setup::logon_offline_identity(&path("store"),owner)?;
     ensure!(baseline["accountSid"] == identity.sid(),"account identity changed");
     network::verify_offline_protection(identity.sid())?; drop(identity);
+    #[cfg(feature="lab-python-online-pdf")]
+    let mut relay=online_pdf::Relay::start()?;
     let listeners = Loopback::new(); let mut before = listeners.sample();
     let mut frames = Vec::new(); let mut assessments: Vec<(Case,Assessment)> = Vec::new(); let mut ordinary_ok = false;
     #[cfg(feature="lab-python-codex-policy-acceptance")]
@@ -417,6 +434,8 @@ fn run_suite(owner: &str, digest: &BTreeMap<String,String>, pins: &mut Vec<File>
     let session_grant=std::cell::RefCell::new(None::<lab::session_grant::SessionGrant>);
     let run = unsafe { broker::run_fixed_python_acceptance(FixedRequest::new(lab::request(Case::initial(),
         GetCurrentProcessId(),policy_hash.clone()))?, &mut |frame: &Frame| {
+        #[cfg(feature="lab-python-online-pdf")]
+        relay.ensure_alive()?;
         let after = listeners.sample();
         if frame.case == Case::OrdinaryOutside {
             ordinary_ok = lab::parse_script(frame).is_ok_and(|s| matches!(s.outside_write,Some(Probe::Success))
@@ -491,7 +510,8 @@ fn run_suite(owner: &str, digest: &BTreeMap<String,String>, pins: &mut Vec<File>
         };
         #[cfg(not(feature="lab-python-codex-policy-acceptance"))]
         let codex_evidence=serde_json::Value::Null;
-        let record = serde_json::json!({"schemaVersion":1,"scope":"LAB_PYTHON_ISOLATION_ACCEPTANCE", "nativeValidated":false,
+        #[allow(unused_mut)]
+        let mut record = serde_json::json!({"schemaVersion":1,"scope":"LAB_PYTHON_ISOLATION_ACCEPTANCE", "nativeValidated":false,
             "labFeature":lab::compiled_feature(),"wfpPolicy":network::wfp_policy_provenance(),
             "expectedWfpFilterCount":network::expected_wfp_filter_count(),
             "codexEvidence":codex_evidence,"absoluteWorkspaceWriteAcceptance":false,
@@ -504,6 +524,10 @@ fn run_suite(owner: &str, digest: &BTreeMap<String,String>, pins: &mut Vec<File>
             "outputBytesMatch":positive_output(frame.case),"ordinaryOutsideControlHealthy":ordinary_ok,
             "outsideWriteArtifact":{"bytesMatch":outside_bytes_match,"present":outside_artifact.as_ref().ok(),"error":outside_artifact.err().map(|e|format!("{e:#}"))},
             "deniedWriteArtifact":{"present":denied_artifact.as_ref().ok(),"error":denied_artifact.err().map(|e|format!("{e:#}"))}});
+        #[cfg(feature="lab-python-online-pdf")]
+        if frame.case.online() {
+            record["onlineArtifacts"]=online_pdf::artifact_evidence(frame);
+        }
         fresh_write(&path("trusted").join(format!("python-isolation-{}.json",frame.case.name())),&serde_json::to_vec_pretty(&record)?)?;
         frames.push(record); assessments.push((frame.case,assessment)); before = after;
         Ok(())
@@ -545,6 +569,12 @@ fn run_suite(owner: &str, digest: &BTreeMap<String,String>, pins: &mut Vec<File>
             &grant.receipt(if applied.is_ok(){"GRANT_VERIFIED"}else{"GRANT_INCONCLUSIVE"},applied.as_ref().err()))?)?;
         applied.map_err(anyhow::Error::from)
     }) };
+    // Cleanup is performed immediately after the broker returns, including Err.
+    // Relay Drop remains a fallback for any earlier owner-side failure.
+    #[cfg(feature="lab-python-online-pdf")]
+    let online_relay_evidence=relay.evidence(&frames);
+    #[cfg(feature="lab-python-online-pdf")]
+    let online_relay_cleanup=relay.cleanup();
     #[cfg(feature="lab-python-logon-sid-comparison")]
     let session_grant_cleanup={
         let mut stored=session_grant.borrow_mut();
@@ -651,6 +681,38 @@ fn run_suite(owner: &str, digest: &BTreeMap<String,String>, pins: &mut Vec<File>
             "Everyone-Modify outside write is preserved as a known exception and never an absolute workspace-only pass",
             "root/child actual token image exact Job and retained-handle cleanup; fixed live-control TCP4/TCP6 only",
             "desktop unavailable and parent death excluded; observed desktop mismatch fails; fullPass/nativeValidated remain false"]);
+    }
+    #[cfg(feature="lab-python-online-pdf")]
+    {
+        let verified=|case:Case|frames.iter().find(|record|record["frame"]["case"]==case.name())
+            .is_some_and(|record|record["onlineArtifacts"]["artifactsVerified"]==true);
+        let online_acceptance=lab::online_pdf_acceptance(&assessments,codex_core,
+            summary["comparisonCompleted"]==true,online_relay_evidence["onlineFetchVerified"]==true,
+            verified(Case::OnlineInstall),verified(Case::OnlinePdf),online_relay_cleanup["cleanupVerified"]==true);
+        summary["status"]=serde_json::json!(if boundary_fail {"POLICY_BOUNDARY_FAIL"}
+            else if online_acceptance {"BOUNDED_ONLINE_PDF_ACCEPTANCE"} else {"INCONCLUSIVE"});
+        summary["boundedCoreAcceptance"]=serde_json::json!(online_acceptance);
+        summary["onlinePdfAcceptance"]=serde_json::json!(online_acceptance);
+        summary["onlineRelayEvidence"]=online_relay_evidence;
+        summary["onlineRelayCleanup"]=online_relay_cleanup;
+        summary["networkProvenance"]=serde_json::json!("Pi-owned sixteen-filter fixed relay profile: dedicated-account TCP 127.0.0.1:43873 only; all other dedicated-account connects blocked; original fourteen-filter profile unchanged");
+        summary["boundedCoreAcceptanceDefinition"]=serde_json::json!([
+            "five previous original-token Codex controls plus fixed online-install and online-pdf, in that order",
+            "sandbox pip installs exact three hash-pinned wheel URLs through the fixed localhost relay; no index, cache, dependency resolution, source build, or prestaged substitute",
+            "owner relay records request, live HTTPS upstream fetch, verified bytes/hash and served events inside the observed install process window",
+            "fresh work-owned pdf-deps, exact package versions/import origins and independent host installation report verification",
+            "separate original-token Python process imports installed dependencies including the Windows Pillow binary and creates one fixed Helvetica PDF",
+            "host checks exact artifact bytes/hash, PDF header, xref, trailer, one page and plain text; structural verification only, rendering is separate",
+            "exact token/image/Job plus retained-handle cleanup for both new roots and explicit owner relay kill, wait and empty-Job cleanup",
+            "Everyone Modify remains a known exception; fullPass/nativeValidated/absolute workspace-only acceptance remain false"]);
+        summary["limitations"]=serde_json::json!([
+            "parent-death NOT_TESTED; full-isolation and absolute workspace-only acceptance remain false",
+            "network exception is a Pi-owned dedicated-account fixed loopback TCP endpoint; trusted relay does not authenticate all TCP callers",
+            "source filter coverage does not prove arbitrary endpoint, DNS, UDP or all-outbound runtime behavior; fixed live controls are bounded observations",
+            "host PDF proof is structural, not a rendering or comprehensive PDF safety validation",
+            "Everyone-Modify outside write is preserved as a declared exception; write restriction is not a read allowlist",
+            "fresh disposable VM required; same-account startup/stdio races and preexisting processes are not independently closed or audited",
+            "desktop leaf observation can be unavailable; window-station attachment is not independently observed"]);
     }
     fresh_write(&path(r"trusted\python-isolation-run.json"),&serde_json::to_vec_pretty(&summary)?)?;
     Ok(summary)

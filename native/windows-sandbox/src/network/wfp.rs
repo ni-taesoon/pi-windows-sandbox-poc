@@ -35,6 +35,8 @@ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_ACTION
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_ACTION0_0;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_CONDITION_ALE_USER_ID;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_CONDITION_IP_PROTOCOL;
+#[cfg(feature = "lab-python-online-pdf")]
+use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_CONDITION_IP_REMOTE_ADDRESS;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_CONDITION_IP_REMOTE_PORT;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_DISPLAY_DATA0;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_FILTER0;
@@ -53,8 +55,12 @@ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_CONDITI
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_CONDITION_VALUE0_0;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_EMPTY;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_MATCH_EQUAL;
+#[cfg(feature = "lab-python-online-pdf")]
+use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_MATCH_NOT_EQUAL;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_SECURITY_DESCRIPTOR_TYPE;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_UINT16;
+#[cfg(feature = "lab-python-online-pdf")]
+use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_UINT32;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_UINT8;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_VALUE0;
 use windows_sys::Win32::Security::Authorization::BuildSecurityDescriptorW;
@@ -93,6 +99,10 @@ pub fn install_wfp_filters_for_sid(sid: &str) -> Result<usize> {
         validate_user_scope(spec.conditions)?;
     }
     let user_condition = UserMatchCondition::for_sid(sid)?;
+    // Direct callers must also refuse an existing product namespace before
+    // opening the write engine. This profile is fresh-lab-only.
+    #[cfg(feature = "lab-python-online-pdf")]
+    require_namespace_absent()?;
     let engine = Engine::open(INFINITE)?;
     let mut transaction = engine.begin_transaction()?;
     ensure_provider(engine.handle)?;
@@ -400,6 +410,40 @@ fn build_conditions(
                     Anonymous: FWP_CONDITION_VALUE0_0 { uint16: *port },
                 },
             },
+            // Microsoft documents IP_REMOTE_ADDRESS as UINT32 for v4,
+            // IP_PROTOCOL as UINT8, and IP_REMOTE_PORT as UINT16. Address and
+            // port integers are HOST order; 127.0.0.1 is numeric 0x7f000001.
+            // Do not use to_be()/htons() or an address-mask NOT_EQUAL here.
+            // UINT8/16/32 are sortable and support FWP_MATCH_NOT_EQUAL.
+            // https://learn.microsoft.com/en-us/windows/win32/fwp/filtering-condition-identifiers-
+            // https://learn.microsoft.com/en-us/windows/win32/api/fwptypes/ne-fwptypes-fwp_match_type
+            #[cfg(feature = "lab-python-online-pdf")]
+            ConditionSpec::RemoteAddressV4Not(address) => FWPM_FILTER_CONDITION0 {
+                fieldKey: FWPM_CONDITION_IP_REMOTE_ADDRESS,
+                matchType: FWP_MATCH_NOT_EQUAL,
+                conditionValue: FWP_CONDITION_VALUE0 {
+                    r#type: FWP_UINT32,
+                    Anonymous: FWP_CONDITION_VALUE0_0 { uint32: *address },
+                },
+            },
+            #[cfg(feature = "lab-python-online-pdf")]
+            ConditionSpec::ProtocolNot(protocol) => FWPM_FILTER_CONDITION0 {
+                fieldKey: FWPM_CONDITION_IP_PROTOCOL,
+                matchType: FWP_MATCH_NOT_EQUAL,
+                conditionValue: FWP_CONDITION_VALUE0 {
+                    r#type: FWP_UINT8,
+                    Anonymous: FWP_CONDITION_VALUE0_0 { uint8: *protocol },
+                },
+            },
+            #[cfg(feature = "lab-python-online-pdf")]
+            ConditionSpec::RemotePortNot(port) => FWPM_FILTER_CONDITION0 {
+                fieldKey: FWPM_CONDITION_IP_REMOTE_PORT,
+                matchType: FWP_MATCH_NOT_EQUAL,
+                conditionValue: FWP_CONDITION_VALUE0 {
+                    r#type: FWP_UINT16,
+                    Anonymous: FWP_CONDITION_VALUE0_0 { uint16: *port },
+                },
+            },
         })
         .collect())
 }
@@ -513,7 +557,8 @@ mod tests {
     fn compiled_filter_count_matches_lab_feature() {
         assert_eq!(
             FILTER_SPECS.len(),
-            if cfg!(any(feature = "lab-python-policy-repair-comparison", feature = "lab-python-codex-policy-acceptance")) { 14 } else { 12 }
+            if cfg!(feature = "lab-python-online-pdf") { 16 }
+            else if cfg!(any(feature = "lab-python-policy-repair-comparison", feature = "lab-python-codex-policy-acceptance")) { 14 } else { 12 }
         );
     }
 }
@@ -566,6 +611,18 @@ pub fn verify_wfp_filters_for_sid(sid: &str) -> Result<()> {
     use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::*;
     let user = UserMatchCondition::for_sid(sid)?;
     let engine = Engine::open(1000)?;
+    // Keep the online enumeration and exact key readbacks in one read-only
+    // transaction. No live/racy count is accepted as profile verification.
+    #[cfg(feature = "lab-python-online-pdf")]
+    let _snapshot = {
+        ensure_success(
+            unsafe { FwpmTransactionBegin0(engine.handle, FWPM_TXN_READ_ONLY) },
+            "begin read-only WFP verification",
+        )?;
+        Transaction { engine: &engine, committed: false }
+    };
+    #[cfg(feature = "lab-python-online-pdf")]
+    verify_exact_profile_inventory(engine.handle)?;
     for spec in FILTER_SPECS {
         validate_user_scope(spec.conditions)?;
         unsafe {
@@ -609,6 +666,8 @@ pub fn verify_wfp_filters_for_sid(sid: &str) -> Result<()> {
                     let matches = match actual.conditionValue.r#type {
                         FWP_UINT8 => a.uint8 == e.uint8,
                         FWP_UINT16 => a.uint16 == e.uint16,
+                        #[cfg(feature = "lab-python-online-pdf")]
+                        FWP_UINT32 => a.uint32 == e.uint32,
                         FWP_SECURITY_DESCRIPTOR_TYPE => {
                             !a.sd.is_null()
                                 && !(*a.sd).data.is_null()
@@ -629,5 +688,90 @@ pub fn verify_wfp_filters_for_sid(sid: &str) -> Result<()> {
             checked?;
         }
     }
+    Ok(())
+}
+
+/// Read-only exact inventory of our four ALE layers, scoped by product provider.
+/// Each request is bounded by the compiled profile size plus one, so unknown,
+/// obsolete, duplicate, or missing product filters fail closed. Other providers
+/// and unrelated host-policy layers are not enumerated.
+#[cfg(feature = "lab-python-online-pdf")]
+fn verify_exact_profile_inventory(engine: HANDLE) -> Result<()> {
+    use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::*;
+    let mut seen = std::collections::BTreeSet::new();
+    for layer in [
+        FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+        FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+        FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V4,
+        FWPM_LAYER_ALE_RESOURCE_ASSIGNMENT_V6,
+    ] {
+        // Microsoft documents providerKey/layerKey as enumeration selectors;
+        // zero conditions matches every filter within that provider and layer.
+        // https://learn.microsoft.com/en-us/windows/win32/api/fwpmtypes/ns-fwpmtypes-fwpm_filter_enum_template0
+        let mut provider_key = PROVIDER_KEY;
+        let template = FWPM_FILTER_ENUM_TEMPLATE0 {
+            providerKey: &mut provider_key,
+            layerKey: layer,
+            enumType: FWP_FILTER_ENUM_FULLY_CONTAINED,
+            flags: FWP_FILTER_ENUM_FLAG_INCLUDE_BOOTTIME | FWP_FILTER_ENUM_FLAG_INCLUDE_DISABLED,
+            providerContextTemplate: null_mut(),
+            numFilterConditions: 0,
+            filterCondition: null_mut(),
+            actionMask: u32::MAX,
+            calloutKey: null_mut(),
+        };
+        let mut enumeration = 0;
+        ensure_success(
+            unsafe { FwpmFilterCreateEnumHandle0(engine, &template, &mut enumeration) },
+            "create product-scoped WFP inventory",
+        )?;
+        let checked = (|| -> Result<()> {
+            let mut entries: *mut *mut FWPM_FILTER0 = null_mut();
+            let mut count = 0;
+            let requested = FILTER_SPECS.len() as u32 + 1;
+            let code = unsafe {
+                FwpmFilterEnum0(engine, enumeration, requested, &mut entries, &mut count)
+            };
+            let page = (|| -> Result<()> {
+                ensure_success(code, "enumerate product-scoped WFP inventory")?;
+                // Fewer than requested entries proves enumeration exhausted.
+                anyhow::ensure!(count < requested, "excess product WFP filters");
+                anyhow::ensure!(count == 0 || !entries.is_null(), "null WFP inventory page");
+                let expected_count = FILTER_SPECS.iter()
+                    .filter(|spec| same_guid(&spec.layer_key, &layer)).count();
+                anyhow::ensure!(count as usize == expected_count, "online relay WFP layer count mismatch");
+                for index in 0..count as usize {
+                    let raw = unsafe { *entries.add(index) };
+                    anyhow::ensure!(!raw.is_null(), "null WFP inventory entry");
+                    let filter = unsafe { &*raw };
+                    anyhow::ensure!(
+                        !filter.providerKey.is_null()
+                            && same_guid(unsafe { &*filter.providerKey }, &PROVIDER_KEY)
+                            && same_guid(&filter.subLayerKey, &SUBLAYER_KEY)
+                            && same_guid(&filter.layerKey, &layer)
+                            && FILTER_SPECS.iter().any(|spec| same_guid(&filter.filterKey, &spec.key)),
+                        "unexpected filter in online relay WFP namespace"
+                    );
+                    let key = &filter.filterKey;
+                    anyhow::ensure!(
+                        seen.insert((key.data1, key.data2, key.data3, key.data4)),
+                        "duplicate online relay WFP filter"
+                    );
+                }
+                Ok(())
+            })();
+            if !entries.is_null() {
+                unsafe { FwpmFreeMemory0((&mut entries as *mut *mut *mut FWPM_FILTER0).cast()) };
+            }
+            page
+        })();
+        let destroyed = ensure_success(
+            unsafe { FwpmFilterDestroyEnumHandle0(engine, enumeration) },
+            "destroy product-scoped WFP inventory",
+        );
+        checked?;
+        destroyed?;
+    }
+    anyhow::ensure!(seen.len() == FILTER_SPECS.len(), "online relay WFP count mismatch");
     Ok(())
 }
