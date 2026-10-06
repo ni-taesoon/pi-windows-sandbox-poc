@@ -10,6 +10,10 @@ compile_error!("minimal load comparison cannot be combined with advanced diagnos
     feature = "lab-loader-trace", feature = "lab-loader-probe", feature = "lab-sechost-breakpoints"
 )))]
 compile_error!("Python isolation acceptance must be built alone without DLL laboratory features");
+#[cfg(all(feature = "lab-python-codex-policy-acceptance", any(
+    feature = "lab-python-policy-repair-comparison", feature = "lab-python-logon-sid-comparison"
+)))]
+compile_error!("Codex policy acceptance cannot be combined with historical candidate/session comparisons");
 #[cfg(feature = "lab-python-isolation-acceptance")]
 pub mod python_isolation;
 pub mod policy_masks;

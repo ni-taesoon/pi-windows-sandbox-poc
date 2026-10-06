@@ -1,4 +1,4 @@
-//! Portable ordering, rollback and deny postconditions for experimental admission.
+//! Portable ordering, rollback and ACL postconditions for experimental admission.
 //! This module neither selects targets nor edits security descriptors.
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -37,7 +37,7 @@ pub struct TransactionFailure<E> {
 
 /// The apply callback owns all account/capability writes for one pinned target.
 /// Roll back even a failing apply: its first write or inheritance propagation may
-/// already have succeeded. Verify the entire deny set only after all writes.
+/// already have succeeded. Verify every grant and deny only after all writes.
 pub fn apply_and_verify<E>(
     kinds: &[EditKind],
     mut apply: impl FnMut(usize) -> Result<(), E>,
@@ -50,10 +50,8 @@ pub fn apply_and_verify<E>(
             attempted.push(index);
             apply(index).map_err(|error| (FailurePhase::Apply, index, error))?;
         }
-        for (index, kind) in kinds.iter().enumerate() {
-            if *kind == EditKind::Deny {
-                verify(index).map_err(|error| (FailurePhase::Verify, index, error))?;
-            }
+        for index in 0..kinds.len() {
+            verify(index).map_err(|error| (FailurePhase::Verify, index, error))?;
         }
         Ok(())
     })();
@@ -95,7 +93,81 @@ pub struct SimpleAce {
     pub kind: AceKind,
     pub flags: u8,
     pub mask: u32,
+    /// Matches the SID being checked: account for denies, account or capability
+    /// in separate grant checks. Unrelated trustees are never grant evidence.
     pub account_sid: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GrantCoverageFailure {
+    NonConcreteRequiredMask,
+    ForbiddenRequiredMask,
+    UnsupportedAce,
+    UnsupportedFlags,
+    NonConcreteTargetAllow,
+    ForbiddenTargetAllow,
+    UnexpectedTargetAllow(u32),
+    MissingMask(u32),
+    MissingInheritedMask(u32),
+}
+
+/// Verify only the selected trustee's grant ACEs, without rewriting other SIDs
+/// or treating their permissions as proof of coverage. This is a structural
+/// postcondition, not AccessCheck: an overlapping direct deny may intentionally
+/// override a valid grant. Inherited grants may provide coverage, but every
+/// selected allow (even inherit-only) must be free of parent DELETE_CHILD and
+/// any concrete right outside the intended grant, including WRITE_DAC/WRITE_OWNER.
+pub fn verify_grant_coverage(
+    aces: &[SimpleAce],
+    required_mask: u32,
+    directory: bool,
+) -> Result<(), GrantCoverageFailure> {
+    use crate::policy_masks::FILE_DELETE_CHILD;
+    if required_mask == 0 || required_mask & NON_CONCRETE_ACCESS != 0 {
+        return Err(GrantCoverageFailure::NonConcreteRequiredMask);
+    }
+    if required_mask & FILE_DELETE_CHILD != 0 {
+        return Err(GrantCoverageFailure::ForbiddenRequiredMask);
+    }
+    let mut missing = required_mask;
+    let mut missing_inherited = required_mask;
+    for ace in aces.iter().filter(|ace| ace.account_sid) {
+        if ace.kind == AceKind::Unsupported {
+            return Err(GrantCoverageFailure::UnsupportedAce);
+        }
+        if ace.flags & !KNOWN_FLAGS != 0 {
+            return Err(GrantCoverageFailure::UnsupportedFlags);
+        }
+        if ace.kind != AceKind::Allow {
+            continue;
+        }
+        if ace.mask & NON_CONCRETE_ACCESS != 0 {
+            return Err(GrantCoverageFailure::NonConcreteTargetAllow);
+        }
+        if ace.mask & FILE_DELETE_CHILD != 0 {
+            return Err(GrantCoverageFailure::ForbiddenTargetAllow);
+        }
+        let unexpected = ace.mask & !required_mask;
+        if unexpected != 0 {
+            return Err(GrantCoverageFailure::UnexpectedTargetAllow(unexpected));
+        }
+        if ace.flags & INHERIT_ONLY == 0 {
+            missing &= !ace.mask;
+        }
+        if ace.flags & (OBJECT_INHERIT | CONTAINER_INHERIT)
+            == (OBJECT_INHERIT | CONTAINER_INHERIT)
+            && ace.flags & NO_PROPAGATE == 0
+        {
+            missing_inherited &= !ace.mask;
+        }
+    }
+    if missing != 0 {
+        return Err(GrantCoverageFailure::MissingMask(missing));
+    }
+    if directory && missing_inherited != 0 {
+        return Err(GrantCoverageFailure::MissingInheritedMask(missing_inherited));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

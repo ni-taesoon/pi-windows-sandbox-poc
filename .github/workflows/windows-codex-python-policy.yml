@@ -1,0 +1,301 @@
+name: Windows Codex-policy Python acceptance (security changes)
+
+# LAB ONLY. Prior external approval must cover the exact reviewed source and
+# disposable VM lifecycle. This separate profile uses the original Codex token,
+# synthetic private/outside-world and protected rename/delete fixtures only.
+# Everyone-write observations remain known exceptions, not workspace-only passes.
+on:
+  push:
+    branches: [lab/codex-python-policy-acceptance]
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: 'Reviewed full lowercase SHA, exactly equal to the selected workflow commit (github.sha)'
+        required: true
+        type: string
+      approved_security_changes:
+        description: 'Prior approval: fresh win22 dedicated account; original Codex token; 14 owned WFP filters; remove parent DELETE_CHILD; only synthetic work/protected rename-delete/private-outside/Everyone exception fixtures; fixed loopback and child cleanup; disable/dispose'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  codex-python-policy-acceptance:
+    runs-on: windows-2022
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_TERM_COLOR: never
+      RUST_BACKTRACE: '0'
+      PYTHONUTF8: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Guard exact repository, dedicated branch and immutable source
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REPOSITORY: ${{ github.repository }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_SHA: ${{ github.sha }}
+          PUSH_DELETED: ${{ github.event.deleted }}
+          APPROVED_SECURITY_CHANGES: ${{ inputs.approved_security_changes }}
+        run: |
+          if ($env:EVENT_REPOSITORY -cne 'ni-taesoon/pi-windows-sandbox-poc') { throw 'Unexpected repository.' }
+          if ($env:EVENT_REF -cne 'refs/heads/lab/codex-python-policy-acceptance') { throw 'Only the dedicated Python isolation branch is permitted.' }
+          if ($env:EVENT_SHA -cnotmatch '\A[0-9a-f]{40}\z') { throw 'Immutable event SHA required.' }
+          if ($env:ImageOS -ne 'win22') { throw 'Only fresh Windows Server 2022 hosted runners are in scope.' }
+          if ($env:EVENT_NAME -ceq 'push') {
+            if ($env:PUSH_DELETED -cne 'false') { throw 'Branch deletion or unknown push state is not permitted.' }
+            # Operator must obtain external approval before pushing. A branch
+            # name is an execution guard, never authorization evidence.
+          } elseif ($env:EVENT_NAME -ceq 'workflow_dispatch') {
+            if ($env:APPROVED_SECURITY_CHANGES -cne 'true') { throw 'Prior security-change approval was not attested.' }
+            if ($env:SOURCE_SHA -cnotmatch '\A[0-9a-f]{40}\z' -or $env:SOURCE_SHA -cne $env:EVENT_SHA) {
+              throw 'Manual source_sha must exactly match github.sha; mutable refs are refused.'
+            }
+          } else { throw 'Unsupported workflow event.' }
+      - name: Check out immutable event source without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          set-safe-directory: false
+          fetch-depth: 1
+      - name: Materialize LF bytes and verify pinned checkout
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          git -c core.autocrlf=false -c core.eol=lf checkout-index --force --all
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot materialize byte-stable LF checkout.' }
+          $actual = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $actual -cne $env:SOURCE_SHA) { throw 'Source identity mismatch.' }
+          New-Item -ItemType Directory -Path codex-python-policy-evidence | Out-Null
+          [ordered]@{
+            sourceCommit=$actual; baselineCommit='a5d959f1490f834eeb439ac662da8984427ac434';
+            scope='LAB_CODEX_POLICY_PYTHON_ACCEPTANCE'; nativeValidated=$false;
+            labVariant='lab-python-codex-policy-acceptance'; additionalAccountConnectFilters=2;
+            totalOfflineWfpFilters=14; knownEveryoneException=$true; strictWorkspaceOnlyAcceptance=$false; fullIsolationEligible=$false
+          } | ConvertTo-Json | Set-Content -LiteralPath codex-python-policy-evidence/source-identity.json -Encoding UTF8
+      - name: Verify frozen source manifest and closed production gate
+        run: |
+          . ./scripts/windows_lab_stage_sources.ps1
+          $repo = [IO.Path]::GetFullPath($PWD.Path)
+          $manifest = Join-Path $repo 'SOURCE_SHA256SUMS.txt'
+          Assert-LabSourceAncestors -Path $manifest -Role 'source-manifest'
+          if ((Get-Item -LiteralPath $manifest).Length -gt 1048576) { throw 'Source manifest exceeds bound.' }
+          $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+          $count = 0
+          foreach ($line in Get-Content -LiteralPath $manifest) {
+            if ($line -cnotmatch '\A([0-9a-f]{64})  ([A-Za-z0-9_./-]+)\z') { throw 'Invalid source manifest entry.' }
+            $expected = $Matches[1]
+            $name = $Matches[2]
+            $parts = @($name.Split('/'))
+            if ([IO.Path]::IsPathRooted($name) -or @($parts | Where-Object { $_ -in @('', '.', '..', '.git', '.aws', '.codex', 'target', 'node_modules') -or $_.EndsWith('.') }).Count -ne 0) { throw 'Unsafe source manifest path.' }
+            if (-not $seen.Add($name)) { throw 'Duplicate or case-colliding source manifest path.' }
+            $path = Join-Path $repo $name
+            Assert-LabSourceAncestors -Path $path -Role 'manifest-source'
+            if ((Get-Item -LiteralPath $path).PSIsContainer) { throw 'Source manifest entry is a directory.' }
+            if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ine $expected) { throw "Source manifest mismatch: $name" }
+            $count++
+          }
+          foreach ($required in @(
+            '.github/workflows/windows-codex-python-policy.yml',
+            'scripts/stage_windows_python_isolation.ps1', 'scripts/windows_lab_stage_sources.ps1',
+            'scripts/python-isolation-fixture.py', 'tests/windows-lab/test_python_isolation_sources.py',
+            'tests/windows-lab/test_codex_python_policy_sources.py',
+            'tests/python-probe/test_isolation_fixture.py',
+            'native/windows-sandbox/Cargo.toml', 'native/windows-sandbox/Cargo.lock',
+            'native/windows-sandbox/examples/python_isolation_acceptance.rs',
+            'native/windows-sandbox/examples/python_isolation_acceptance/windows.rs',
+            'native/windows-sandbox/src/python_isolation.rs',
+            'native/windows-sandbox/src/python_isolation/broker.rs',
+            'native/windows-sandbox/src/python_isolation/observer.rs',
+            'native/windows-sandbox/src/python_isolation/token_candidate.rs',
+            'native/windows-sandbox/src/python_isolation/codex_fixtures.rs',
+            'native/windows-sandbox/src/token.rs', 'native/windows-sandbox/src/network.rs',
+            'native/windows-sandbox/src/network/wfp.rs', 'native/windows-sandbox/src/network/wfp/filter_specs.rs',
+            'native/windows-sandbox/tests/wfp_offline_scope_contract.rs',
+            'native/windows-sandbox/src/admission.rs', 'native/windows-sandbox/src/admission_plan.rs',
+            'native/windows-sandbox/src/policy_masks.rs',
+            'native/windows-sandbox/tests/admission_policy_contract.rs',
+            'native/windows-sandbox/src/broker.rs', 'native/windows-sandbox/src/lib.rs',
+            'native/windows-sandbox/src/main.rs', 'native/windows-sandbox/src/process.rs',
+            'native/windows-sandbox/tests/python_isolation_contract.rs')) {
+            if (-not $seen.Contains($required)) { throw "Source manifest omits required source: $required" }
+          }
+          if (-not ((Get-Content -LiteralPath native/windows-sandbox/src/lib.rs) -ccontains 'pub const NATIVE_VALIDATED: bool = false;')) { throw 'Production native gate changed.' }
+          [ordered]@{
+            sourceManifestSha256=(Get-FileHash -LiteralPath $manifest -Algorithm SHA256).Hash;
+            verifiedEntries=$count; allListedFilesMatch=$true; nativeValidated=$false;
+            limitation='Source identity only; hashes do not grant authorization or establish Windows security validation.'
+          } | ConvertTo-Json | Set-Content -LiteralPath codex-python-policy-evidence/source-manifest-verification.json -Encoding UTF8
+      - name: Select official exact Python runtime before security stages
+        id: python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0, same verified official pin
+        with:
+          python-version: '3.12.10'
+          architecture: x64
+          check-latest: false
+          update-environment: false
+      - name: Verify exact official runtime and portable source contracts
+        env:
+          PYTHON_EXECUTABLE: ${{ steps.python.outputs.python-path }}
+        run: |
+          $python = $env:PYTHON_EXECUTABLE
+          & $python -I -S -B -c "import sys, struct; assert sys.version_info[:3] == (3, 12, 10) and struct.calcsize('P') == 8; print(sys.version)" 2>&1 | Tee-Object -FilePath codex-python-policy-evidence/python-version.log
+          if ($LASTEXITCODE -ne 0) { throw 'Exact Python 3.12.10 x64 unavailable; no staging.' }
+          # Source inspection and portable fixture mocks only. No real socket,
+          # Windows canary, account, ACL or driver execution is permitted here.
+          & $python -I -S -B -m unittest discover -s tests/windows-lab -p 'test_*python*source*.py' -v 2>&1 | Tee-Object -FilePath codex-python-policy-evidence/source-contract-tests.log
+          if ($LASTEXITCODE -ne 0) { throw 'Portable source contracts failed; no security stage.' }
+          & $python -I -S -B tests/python-probe/test_isolation_fixture.py -v 2>&1 | Tee-Object -FilePath codex-python-policy-evidence/fixture-contract-tests.log
+          if ($LASTEXITCODE -ne 0) { throw 'Portable fixture mocks failed; no security stage.' }
+      - name: Check and build only fixed helper and isolation driver
+        env:
+          PYTHON_EXECUTABLE: ${{ steps.python.outputs.python-path }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          # Installed official Rust/MSVC only. No toolchain installers, caches,
+          # loader tracing, breakpoint probes, DLL analysis or runtime packages.
+          rustup run stable rustc --version --verbose 2>&1 | Tee-Object -FilePath codex-python-policy-evidence/toolchain.log
+          if ($LASTEXITCODE -ne 0) { throw 'Installed official Rust toolchain unavailable.' }
+          rustup run stable cargo check --locked --no-default-features --target x86_64-pc-windows-msvc --manifest-path native/windows-sandbox/Cargo.toml --bin pi-windows-sandbox --example python_isolation_acceptance 2>&1 | Tee-Object -FilePath codex-python-policy-evidence/default-check.log
+          if ($LASTEXITCODE -ne 0) { throw 'Default-feature compilation failed; no staging.' }
+          rustup run stable cargo check --locked --no-default-features --features lab-python-isolation-acceptance --target x86_64-pc-windows-msvc --manifest-path native/windows-sandbox/Cargo.toml --bin pi-windows-sandbox --example python_isolation_acceptance 2>&1 | Tee-Object -FilePath codex-python-policy-evidence/feature-check.log
+          if ($LASTEXITCODE -ne 0) { throw 'Original lab feature compilation failed; no staging.' }
+          rustup run stable cargo check --locked --no-default-features --features lab-python-policy-repair-comparison --target x86_64-pc-windows-msvc --manifest-path native/windows-sandbox/Cargo.toml --bin pi-windows-sandbox --example python_isolation_acceptance 2>&1 | Tee-Object -FilePath codex-python-policy-evidence/policy-feature-check.log
+          if ($LASTEXITCODE -ne 0) { throw 'Approved policy comparison compilation failed; no staging.' }
+          rustup run stable cargo check --locked --no-default-features --features lab-python-logon-sid-comparison --target x86_64-pc-windows-msvc --manifest-path native/windows-sandbox/Cargo.toml --bin pi-windows-sandbox --example python_isolation_acceptance 2>&1 | Tee-Object -FilePath codex-python-policy-evidence/logon-feature-check.log
+          if ($LASTEXITCODE -ne 0) { throw 'Approved Logon-SID comparison compilation failed; no staging.' }
+          rustup run stable cargo build --locked --no-default-features --features lab-python-codex-policy-acceptance --target x86_64-pc-windows-msvc --manifest-path native/windows-sandbox/Cargo.toml --bin pi-windows-sandbox --example python_isolation_acceptance 2>&1 | Tee-Object -FilePath codex-python-policy-evidence/build.log
+          if ($LASTEXITCODE -ne 0) { throw 'Native build/link failed; no staging.' }
+          $build = "$PWD/native/windows-sandbox/target/x86_64-pc-windows-msvc/debug"
+          [ordered]@{
+            sourceCommit=$env:SOURCE_SHA;
+            sourceManifestSha256=(Get-FileHash -LiteralPath SOURCE_SHA256SUMS.txt -Algorithm SHA256).Hash;
+            lockfileSha256=(Get-FileHash -LiteralPath native/windows-sandbox/Cargo.lock -Algorithm SHA256).Hash;
+            driverSha256=(Get-FileHash -LiteralPath "$build/examples/python_isolation_acceptance.exe" -Algorithm SHA256).Hash;
+            helperSha256=(Get-FileHash -LiteralPath "$build/pi-windows-sandbox.exe" -Algorithm SHA256).Hash;
+            fixtureSha256=(Get-FileHash -LiteralPath scripts/python-isolation-fixture.py -Algorithm SHA256).Hash;
+            pythonSha256=(Get-FileHash -LiteralPath $env:PYTHON_EXECUTABLE -Algorithm SHA256).Hash;
+            pythonVersion='3.12.10'; architecture='x64';
+            labVariant='lab-python-codex-policy-acceptance'; additionalAccountConnectFilters=2;
+            totalOfflineWfpFilters=14; knownEveryoneException=$true; strictWorkspaceOnlyAcceptance=$false; fullIsolationEligible=$false;
+            provenance='Pinned source, installed official Rust/MSVC, official setup-python exact runtime. Per-run hashes are not independent compiler or upstream runtime provenance verification.'
+          } | ConvertTo-Json | Set-Content -LiteralPath codex-python-policy-evidence/build-identity.json -Encoding UTF8
+      - name: Verify pure native contracts before any lab security setup
+        run: |
+          rustup run stable cargo test --locked --no-default-features --features lab-python-codex-policy-acceptance --target x86_64-pc-windows-msvc --manifest-path native/windows-sandbox/Cargo.toml --test python_isolation_contract --test admission_policy_contract --test wfp_offline_scope_contract --test broker_wait_contract --test startup_diagnostics_contract 2>&1 | Tee-Object -FilePath codex-python-policy-evidence/native-contract-tests.log
+          if ($LASTEXITCODE -ne 0) { throw 'Pure native contracts failed; no staging or setup.' }
+          # This exact module contains only four pure spec/shape tests; never run
+          # the full Windows library security-test suite before authorization.
+          rustup run stable cargo test --locked --no-default-features --features lab-python-codex-policy-acceptance --target x86_64-pc-windows-msvc --manifest-path native/windows-sandbox/Cargo.toml --lib network::wfp::tests:: 2>&1 | Tee-Object -FilePath codex-python-policy-evidence/native-wfp-scope-tests.log
+          if ($LASTEXITCODE -ne 0) { throw 'Pure WFP scope guards failed; no staging or setup.' }
+          rustup run stable cargo test --locked --no-default-features --features lab-python-codex-policy-acceptance --target x86_64-pc-windows-msvc --manifest-path native/windows-sandbox/Cargo.toml --lib policy_masks::tests:: 2>&1 | Tee-Object -FilePath codex-python-policy-evidence/native-policy-mask-tests.log
+          if ($LASTEXITCODE -ne 0) { throw 'Pure write-mask contracts failed; no staging or setup.' }
+          rustup run stable cargo test --locked --no-default-features --features lab-python-codex-policy-acceptance --target x86_64-pc-windows-msvc --manifest-path native/windows-sandbox/Cargo.toml --lib python_isolation::codex_fixtures::tests:: 2>&1 | Tee-Object -FilePath codex-python-policy-evidence/native-codex-fixture-tests.log
+          if ($LASTEXITCODE -ne 0) { throw 'Pure synthetic fixture ACL contracts failed; no staging or setup.' }
+      - name: Stage protected runtime and fixed outside-world/private leaves
+        id: stage
+        env:
+          PYTHON_EXECUTABLE: ${{ steps.python.outputs.python-path }}
+        run: |
+          $identity = Get-Content -LiteralPath codex-python-policy-evidence/build-identity.json -Raw | ConvertFrom-Json
+          ./scripts/stage_windows_python_isolation.ps1 -Phase Stage -ApprovedDisposableVm -CodexPolicyAcceptance `
+            -PythonHome ([IO.Path]::GetDirectoryName($env:PYTHON_EXECUTABLE)) -BuildDirectory "$PWD/native/windows-sandbox/target/x86_64-pc-windows-msvc/debug" `
+            -ExpectedDriverSha256 $identity.driverSha256 -ExpectedHelperSha256 $identity.helperSha256 `
+            -ExpectedFixtureSha256 $identity.fixtureSha256 -ExpectedPythonSha256 $identity.pythonSha256 `
+            -ApprovedSourceSha256 $identity.sourceManifestSha256 -SourceCommit $identity.sourceCommit 2>&1 | Tee-Object -FilePath codex-python-policy-evidence/stage.log
+      - name: Create fixed benign contents and set up owned account and offline protection
+        id: setup
+        run: |
+          ./scripts/stage_windows_python_isolation.ps1 -Phase Setup -ApprovedDisposableVm -CodexPolicyAcceptance 2>&1 | Tee-Object -FilePath codex-python-policy-evidence/setup.log
+      - name: Run five fixed original-token Codex-policy cases once
+        id: run
+        run: |
+          # Fixed local endpoints only. Fresh synthetic protected targets have
+          # no retained file handles during rename/delete denial observations.
+          ./scripts/stage_windows_python_isolation.ps1 -Phase Run -ApprovedDisposableVm -CodexPolicyAcceptance 2>&1 | Tee-Object -FilePath codex-python-policy-evidence/run.log
+      - name: Always attempt scoped owned-account disable after setup attempt
+        id: disable
+        if: ${{ always() && steps.stage.outcome == 'success' && steps.setup.outcome != 'skipped' }}
+        run: |
+          # Authenticated store selects the owned SID. Never delete/substitute
+          # accounts, broaden ACLs, retry, or launch a host fallback.
+          ./scripts/stage_windows_python_isolation.ps1 -Phase Disable -ApprovedDisposableVm -CodexPolicyAcceptance 2>&1 | Tee-Object -FilePath codex-python-policy-evidence/disable.log
+      - name: Copy only fixed named non-secret JSON evidence
+        if: ${{ always() && steps.stage.outcome == 'success' }}
+        env:
+          FINAL_DISABLE_OUTCOME: ${{ steps.disable.outcome }}
+        run: |
+          . ./scripts/windows_lab_stage_sources.ps1
+          foreach ($name in @(
+            'python-isolation-stage.json',
+            'python-isolation-runtime-manifest.json',
+            'python-isolation-baseline.json',
+            'python-isolation-ordinary-outside.json',
+            'python-isolation-codex-boundary.json',
+            'python-isolation-codex-file-operations.json',
+            'python-isolation-codex-child-normal-exit.json',
+            'python-isolation-codex-child-timeout.json',
+            'python-isolation-codex-fixtures.json',
+            'python-isolation-run.json',
+            'python-isolation-recovery.json',
+            'python-isolation-summary.json')) {
+            $source = Join-Path 'C:\PiSandboxLab\trusted' $name
+            if (Test-Path -LiteralPath $source -PathType Leaf) {
+              Assert-LabSourceAncestors -Path $source -Role 'isolation-evidence'
+              if ((Get-Item -LiteralPath $source).Length -gt 8388608) { throw 'Isolation evidence exceeds bound.' }
+              Copy-Item -LiteralPath $source -Destination (Join-Path 'codex-python-policy-evidence' $name)
+            }
+          }
+          "Final explicit disable step: $env:FINAL_DISABLE_OUTCOME. Failure requires investigation and fresh hosted VM disposal." | Add-Content $env:GITHUB_STEP_SUMMARY
+          'LAB ONLY: five Codex-policy cases use the original token. Everyone-writable outside output is a known exception. This profile does not overwrite previous failed comparisons, assert absolute workspace-only writes, or establish full isolation. Parent-death remains NOT_TESTED. Production activation stays false.' | Add-Content $env:GITHUB_STEP_SUMMARY
+          'Account disable retains all 14 scoped WFP filters until disposable VM teardown; no reboot/BFE-restart or inbound/protocol-completeness claim.' | Add-Content $env:GITHUB_STEP_SUMMARY
+          'Per-run all-file runtime hashes bind observed bytes; they do not independently prove upstream provenance. No automatic in-job retry or host fallback. Dispose the fresh VM through hosted job teardown.' | Add-Content $env:GITHUB_STEP_SUMMARY
+      - name: Retain only allowlisted safe JSON and logs, never credentials or store
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2, official release
+        with:
+          name: windows-codex-python-policy-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: warn
+          include-hidden-files: false
+          path: |
+            codex-python-policy-evidence/source-identity.json
+            codex-python-policy-evidence/source-manifest-verification.json
+            codex-python-policy-evidence/build-identity.json
+            codex-python-policy-evidence/python-version.log
+            codex-python-policy-evidence/source-contract-tests.log
+            codex-python-policy-evidence/fixture-contract-tests.log
+            codex-python-policy-evidence/toolchain.log
+            codex-python-policy-evidence/default-check.log
+            codex-python-policy-evidence/feature-check.log
+            codex-python-policy-evidence/policy-feature-check.log
+            codex-python-policy-evidence/logon-feature-check.log
+            codex-python-policy-evidence/build.log
+            codex-python-policy-evidence/native-contract-tests.log
+            codex-python-policy-evidence/native-wfp-scope-tests.log
+            codex-python-policy-evidence/native-policy-mask-tests.log
+            codex-python-policy-evidence/native-codex-fixture-tests.log
+            codex-python-policy-evidence/stage.log
+            codex-python-policy-evidence/setup.log
+            codex-python-policy-evidence/run.log
+            codex-python-policy-evidence/disable.log
+            codex-python-policy-evidence/python-isolation-stage.json
+            codex-python-policy-evidence/python-isolation-runtime-manifest.json
+            codex-python-policy-evidence/python-isolation-baseline.json
+            codex-python-policy-evidence/python-isolation-ordinary-outside.json
+            codex-python-policy-evidence/python-isolation-codex-boundary.json
+            codex-python-policy-evidence/python-isolation-codex-file-operations.json
+            codex-python-policy-evidence/python-isolation-codex-child-normal-exit.json
+            codex-python-policy-evidence/python-isolation-codex-child-timeout.json
+            codex-python-policy-evidence/python-isolation-codex-fixtures.json
+            codex-python-policy-evidence/python-isolation-run.json
+            codex-python-policy-evidence/python-isolation-recovery.json
+            codex-python-policy-evidence/python-isolation-summary.json

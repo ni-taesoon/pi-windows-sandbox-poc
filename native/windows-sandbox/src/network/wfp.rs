@@ -513,7 +513,7 @@ mod tests {
     fn compiled_filter_count_matches_lab_feature() {
         assert_eq!(
             FILTER_SPECS.len(),
-            if cfg!(feature = "lab-python-policy-repair-comparison") { 14 } else { 12 }
+            if cfg!(any(feature = "lab-python-policy-repair-comparison", feature = "lab-python-codex-policy-acceptance")) { 14 } else { 12 }
         );
     }
 }

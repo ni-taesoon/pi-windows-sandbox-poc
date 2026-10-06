@@ -14,13 +14,17 @@ param(
   [string]$ExpectedFixtureSha256,
   [string]$ExpectedPythonSha256,
   [string]$ApprovedSourceSha256,
-  [string]$SourceCommit
+  [string]$SourceCommit,
+  [switch]$CodexPolicyAcceptance
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if (-not $ApprovedDisposableVm) { throw 'Explicit disposable VM security-change approval required.' }
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_OS -ne 'Windows') { throw 'This lab requires a fresh GitHub-hosted Windows runner.' }
-if ($env:GITHUB_REPOSITORY -cne 'ni-taesoon/pi-windows-sandbox-poc' -or $env:GITHUB_REF -cne 'refs/heads/lab/python-isolation-acceptance') { throw 'Unexpected repository or lab branch.' }
+if ($env:GITHUB_REPOSITORY -cne 'ni-taesoon/pi-windows-sandbox-poc') { throw 'Unexpected repository.' }
+if ($CodexPolicyAcceptance) {
+  if ($env:GITHUB_REF -cne 'refs/heads/lab/codex-python-policy-acceptance') { throw 'Only the fixed Codex-policy branch may select this profile.' }
+} elseif ($env:GITHUB_REF -cne 'refs/heads/lab/python-isolation-acceptance') { throw 'Unexpected comparison lab branch.' }
 if ($env:GITHUB_SHA -cnotmatch '\A[0-9a-f]{40}\z') { throw 'Immutable event SHA required.' }
 if ($env:ImageOS -ne 'win22') { throw 'Only Windows Server 2022 (win22) is in scope.' }
 $os = Get-CimInstance -ClassName Win32_OperatingSystem
@@ -119,7 +123,9 @@ if ($Phase -eq 'Stage') {
   $acl = [Security.AccessControl.DirectorySecurity]::new()
   $acl.SetSecurityDescriptorSddlForm("O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;$ownerSid)(A;OICI;FRFX;;;BU)")
   Set-Acl -LiteralPath $root -AclObject $acl
-  foreach ($directory in @('trusted', 'runtime', 'work', 'work\denied-write', 'work\denied-read', 'fixtures', 'fixtures\outside-world', 'fixtures\outside-logon')) {
+  $directories = @('trusted', 'runtime', 'work', 'work\denied-write', 'work\denied-read', 'fixtures', 'fixtures\outside-world', 'fixtures\outside-logon')
+  if ($CodexPolicyAcceptance) { $directories = @($directories | Where-Object { $_ -cne 'fixtures\outside-logon' }) + @('fixtures\outside-private') }
+  foreach ($directory in $directories) {
     New-Item -ItemType Directory -Path (Join-Path $root $directory) | Out-Null
   }
   foreach ($file in $files) {
@@ -154,6 +160,13 @@ if ($Phase -eq 'Stage') {
   # This sole staging exception is a newly created synthetic negative-control
   # leaf, never an executable/input location. No real user directory is changed.
   Invoke-Icacls -Arguments @("$root\fixtures\outside-world", '/grant:r', '*S-1-1-0:(OI)(CI)(M)', '/Q')
+  if ($CodexPolicyAcceptance) {
+    # One newly created private synthetic leaf. The host owner must demonstrate
+    # writes; sandbox-account/group/capability/Everyone grants are absent.
+    $privateAcl = [Security.AccessControl.DirectorySecurity]::new()
+    $privateAcl.SetSecurityDescriptorSddlForm("O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;$ownerSid)")
+    Set-Acl -LiteralPath "$root\fixtures\outside-private" -AclObject $privateAcl
+  }
   [ordered]@{
     schemaVersion=1; pythonVersion='3.12.10'; inputs=$inputs;
     excludedRuntimeEntries=@($selection.skipped);
@@ -168,7 +181,9 @@ if ($Phase -eq 'Stage') {
     fixtureSha256=$ExpectedFixtureSha256.ToLowerInvariant(); pythonSha256=$ExpectedPythonSha256.ToLowerInvariant();
     runtimeManifestSha256=(Get-FileHash -LiteralPath $runtimeManifest -Algorithm SHA256).Hash.ToLowerInvariant();
     runtimeFileCount=$inputs.Count; pythonVersion='3.12.10'; pythonFileVersion=$pythonFileVersion;
-    outsideLogonInitiallyProtected=$true; outsideLogonGrantOwner='native-verified-helper-logon-only'; nativeValidated=$false
+    codexPolicyAcceptance=[bool]$CodexPolicyAcceptance; outsidePrivateOwnerOnly=[bool]$CodexPolicyAcceptance;
+    outsideLogonInitiallyProtected=(-not [bool]$CodexPolicyAcceptance);
+    outsideLogonGrantOwner=$(if ($CodexPolicyAcceptance) { 'NOT_STAGED' } else { 'native-verified-helper-logon-only' }); nativeValidated=$false
   } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $stageEvidence -Encoding UTF8
   Write-Output 'LAB_PYTHON_ISOLATION_STAGED_ONLY: no account, fixture execution or network probe. Native setup creates fixed benign content.'
   exit 0
@@ -176,6 +191,7 @@ if ($Phase -eq 'Stage') {
 Assert-LabSourceAncestors -Path $stageEvidence -Role 'stage-evidence'
 if ((Get-Item -LiteralPath $stageEvidence -Force).PSIsContainer -or (Get-Item -LiteralPath $stageEvidence -Force).Length -gt 65536) { throw 'Invalid stage evidence.' }
 $stage = Get-Content -LiteralPath $stageEvidence -Raw | ConvertFrom-Json
+if ($stage.codexPolicyAcceptance -ne [bool]$CodexPolicyAcceptance) { throw 'Staged laboratory profile mismatch.' }
 if ($stage.scope -cne 'LAB_PYTHON_ISOLATION_ACCEPTANCE' -or $stage.nativeValidated -ne $false -or $stage.sourceCommit -cne $env:GITHUB_SHA) { throw 'Unexpected stage identity.' }
 Assert-FixedFile -Path $driver -Hash $stage.driverSha256 -Role 'staged-isolation-driver'
 # Disable requires only its hash-bound driver and stage identity. A changed or
@@ -197,7 +213,9 @@ if ($Phase -ne 'Disable') {
     $expected = $manifest.inputs.PSObject.Properties[$entry.source]
     if ($null -eq $expected -or $entry.sha256 -cne $expected.Value) { throw 'Runtime all-file hash verification failed.' }
   }
-  foreach ($directory in @('work\denied-read', 'work\denied-write', 'fixtures\outside-world', 'fixtures\outside-logon')) {
+  $policyRoots = @('work\denied-read', 'work\denied-write', 'fixtures\outside-world', 'fixtures\outside-logon')
+  if ($CodexPolicyAcceptance) { $policyRoots = @($policyRoots | Where-Object { $_ -cne 'fixtures\outside-logon' }) + @('fixtures\outside-private') }
+  foreach ($directory in $policyRoots) {
     $path = Join-Path $root $directory
     Assert-LabSourceAncestors -Path $path -Role 'existing-synthetic-policy-root'
     if (-not (Get-Item -LiteralPath $path -Force).PSIsContainer) { throw 'All fixed policy roots must already exist.' }

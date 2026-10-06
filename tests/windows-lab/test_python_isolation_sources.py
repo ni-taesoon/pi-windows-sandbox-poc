@@ -519,9 +519,9 @@ Write-Output 'PURE_NORMALIZATION_OK'
     def test_session_fixture_starts_protected_without_a_staging_sid_grant(self):
         source = self.stager
         self.assertIn("'fixtures\\outside-world', 'fixtures\\outside-logon'", source)
-        self.assertEqual(source.count("'fixtures\\outside-logon'"), 2)
-        self.assertIn('outsideLogonInitiallyProtected=$true', source)
-        self.assertIn("outsideLogonGrantOwner='native-verified-helper-logon-only'", source)
+        self.assertEqual(source.count("'fixtures\\outside-logon'"), 4)
+        self.assertIn('outsideLogonInitiallyProtected=(-not [bool]$CodexPolicyAcceptance)', source)
+        self.assertIn("else { 'native-verified-helper-logon-only' }", source)
         self.assertIn("Invoke-Icacls -Arguments @($root, '/setowner', '*S-1-5-32-544', '/T', '/Q')", source)
         grants = [line for line in self.stage_actions.splitlines() if "'/grant" in line]
         self.assertEqual(len(grants), 1)

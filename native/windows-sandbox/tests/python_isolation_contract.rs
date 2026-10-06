@@ -6,12 +6,12 @@ fn frame(case: Case) -> Frame {
         outside_read:Some(Probe::Success),outside_write:Some(Probe::PermissionDenied { winerror:Some(5), errno:None, error_type:None }),
         input_ok:Some(true),output_ok:Some(true),denied_read:Some(Probe::PermissionDenied { winerror:Some(5), errno:None, error_type:None }),
         denied_write:Some(Probe::PermissionDenied { winerror:Some(5), errno:None, error_type:None }),tcp4:Some(Probe::PermissionDenied { winerror:Some(10013), errno:None, error_type:None }),
-        tcp6:Some(Probe::PermissionDenied { winerror:Some(10013), errno:None, error_type:None }),session_grant_write:None };
+        tcp6:Some(Probe::PermissionDenied { winerror:Some(10013), errno:None, error_type:None }),session_grant_write:None,private_outside_write:None,file_operations:None };
     let mut f = Frame { case, account_sid:"S-1-5-21-1-2-3-1001".into(),capability_sid:"S-1-5-21-4-5-6-7".into(),
         private_desktop:"Winsta0\\PiSandboxDesktop-0123456789abcdef0123456789abcdef".into(),
         run:Some(RunResult {kind:"result".into(),exit_code:0,stdout_base64:String::new(),stderr_base64:String::new(),
             stop_reason:StopReason::Exited,timed_out:false,truncated:false,terminated:true,cleanup_verified:true}),
-        launch_error:None,native:NativeEvidence::default(),candidate_token:None,session_token:None };
+        launch_error:None,native:NativeEvidence::default(),candidate_token:None,session_token:None,codex_token:None };
     let mut restrictors = vec![f.capability_sid.clone()];
     if case.pinned() { restrictors.extend([f.account_sid.clone(),"S-1-1-0".into(),"S-1-5-5-1-2".into()]); }
     restrictors.sort();
@@ -222,7 +222,7 @@ fn candidate_configuration(capability: &str) -> CandidateTokenConfiguration {
     c=candidate_configuration(cap);c.default_dacl_aces[0].flags=3;assert!(!c.matches_capability(cap));
     c=candidate_configuration(cap);c.default_dacl_aces[0].role=DefaultDaclRole::OwnerRights;assert!(!c.matches_capability(cap));
 }
-#[cfg(not(feature="lab-python-policy-repair-comparison"))]
+#[cfg(all(not(feature="lab-python-policy-repair-comparison"),not(feature="lab-python-codex-policy-acceptance")))]
 #[test] fn base_feature_has_no_candidate_cases() {
     assert_eq!(Case::ALL.len(),7);assert!(!Case::ALL.iter().any(|case|case.candidate()));
     assert!(serde_json::from_str::<Case>("\"candidate-boundary\"").is_err());
@@ -356,4 +356,140 @@ fn session_configuration(capability:&str)->SessionTokenConfiguration{
     assert!(driver.contains("\"strictWorkspaceOnlyAcceptance\":false"));
     assert!(driver.contains("AUTHORIZED_SESSION_GRANT_OBSERVED"));
     assert!(driver.contains("child artifact ACL/ownership is not a production revocation guarantee"));
+}
+
+#[cfg(feature="lab-python-codex-policy-acceptance")]
+fn codex_frame(case:Case)->Frame {
+    let mut f=frame(Case::PinnedBoundary);
+    let mut s=parse_script(&f).unwrap();f.case=case;s.mode=case;
+    if case.codex() {
+        f.codex_token=Some(CodexTokenConfiguration {profile:"ORIGINAL_PINNED_CODEX_WRITE_RESTRICTED_V1".into(),
+            actual_logon_sid:"S-1-5-5-1-2".into(),restricting_sids:f.native.root.as_ref().unwrap().restricting_sids.clone()});
+    }
+    if case.boundary() {
+        s.outside_write=Some(Probe::Success);
+        s.private_outside_write=Some(denied_mutation());
+    } else {
+        s.input_ok=None;s.output_ok=None;s.denied_read=None;s.denied_write=None;s.tcp4=None;s.tcp6=None;
+        if case==Case::OrdinaryOutside {
+            f.native.root.as_mut().unwrap().restricting_sids.clear();s.outside_write=Some(Probe::Success);
+        } else {s.outside_read=None;s.outside_write=None;}
+        if case.file_operations() {s.file_operations=Some(passing_file_operations());}
+        if case.descendant() {
+            s.marker="CHILD_STARTED".into();let mut child=f.native.root.as_ref().unwrap().clone();child.pid=11;
+            f.native.descendants.push(child);
+        }
+        if case.timeout() {let run=f.run.as_mut().unwrap();run.stop_reason=StopReason::Timeout;run.timed_out=true;}
+    }
+    set_script(&mut f,&s);f
+}
+fn denied_mutation()->Probe {Probe::PermissionDenied {winerror:Some(5),errno:Some(13),error_type:Some("PermissionError".into())}}
+fn passing_file_operations()->FileOperations {FileOperations {
+    allowed_file_rename:Probe::Success,allowed_file_delete:Probe::Success,
+    allowed_dir_rename:Probe::Success,allowed_dir_delete:Probe::Success,
+    protected_file_read:Probe::Success,protected_file_write:denied_mutation(),
+    protected_file_rename:denied_mutation(),protected_file_delete:denied_mutation(),
+    protected_dir_write:denied_mutation(),protected_dir_rename:denied_mutation(),protected_dir_delete:denied_mutation(),
+}}
+#[cfg(feature="lab-python-codex-policy-acceptance")]
+#[test] fn codex_profile_is_exactly_five_cases_and_rejects_old_suite_requests() {
+    assert_eq!(Case::ALL.map(Case::name),["ordinary-outside","codex-boundary","codex-file-operations",
+        "codex-child-normal-exit","codex-child-timeout"]);
+    assert_eq!(Case::initial(),Case::CodexBoundary);
+    assert_eq!(compiled_feature(),"lab-python-codex-policy-acceptance");
+    assert!(Case::CodexFileOperations.file_operations());assert!(!Case::CodexFileOperations.descendant());
+    for case in [Case::StrictBoundary,Case::PinnedBoundary,Case::PinnedChildNormalExit,Case::PinnedChildTimeout] {
+        assert!(FixedRequest::new(request(case,123,"0".repeat(64))).is_err());
+    }
+    let cargo=include_str!("../Cargo.toml");
+    assert!(cargo.contains("lab-python-codex-policy-acceptance = [\"lab-python-isolation-acceptance\"]"));
+    assert!(include_str!("../src/lib.rs").contains("Codex policy acceptance cannot be combined"));
+}
+#[cfg(feature="lab-python-codex-policy-acceptance")]
+#[test] fn codex_known_world_exception_can_pass_declared_contract_but_not_absolute_gate() {
+    let values=Case::ALL.map(|case|(case,assess(&codex_frame(case),true,true,true)));
+    let boundary=&values[1].1;
+    assert_eq!(boundary.outside_write,Verdict::KnownExceptionObserved);
+    assert!(!boundary.full_pass);assert!(!pi_windows_sandbox::NATIVE_VALIDATED);
+    assert!(codex_policy_acceptance(&values,true,true,true));
+    assert!(!codex_policy_acceptance(&values,false,true,true));
+    assert!(!codex_policy_acceptance(&values,true,false,true));
+    assert!(!codex_policy_acceptance(&values,true,true,false));
+    assert!(!codex_policy_acceptance(&values[..4],true,true,true));
+    let mut duplicated=values.clone();duplicated[4]=duplicated[3].clone();
+    assert!(!codex_policy_acceptance(&duplicated,true,true,true));
+    // The old pinned interpretation remains an actual POLICY_BOUNDARY_FAIL.
+    let mut old=frame(Case::PinnedBoundary);let mut script=parse_script(&old).unwrap();
+    script.outside_write=Some(Probe::Success);set_script(&mut old,&script);
+    assert_eq!(assess(&old,true,true,true).outside_write,Verdict::PolicyBoundaryFail);
+}
+#[cfg(feature="lab-python-codex-policy-acceptance")]
+#[test] fn codex_native_identity_requires_actual_logon_and_original_four_restrictors() {
+    let mut f=codex_frame(Case::CodexBoundary);assert!(native_valid(&f));
+    f.codex_token.as_mut().unwrap().actual_logon_sid="S-1-5-5-9-9".into();assert!(!native_valid(&f));
+    f=codex_frame(Case::CodexBoundary);f.native.root.as_mut().unwrap().restricting_sids.pop();assert!(!native_valid(&f));
+    f=codex_frame(Case::CodexBoundary);f.codex_token=None;assert!(!native_valid(&f));
+}
+#[cfg(feature="lab-python-codex-policy-acceptance")]
+#[test] fn codex_private_missing_unknown_or_successful_probe_cannot_pass() {
+    for probe in [None,Some(Probe::Success),Some(Probe::Inconclusive {winerror:Some(32),errno:Some(13),error_type:Some("PermissionError".into())})] {
+        let mut f=codex_frame(Case::CodexBoundary);let mut s=parse_script(&f).unwrap();s.private_outside_write=probe;set_script(&mut f,&s);
+        let a=assess(&f,true,true,true);assert_ne!(a.private_outside_write,Verdict::ObservedPass);
+    }
+    let mut value=serde_json::to_value(passing_file_operations()).unwrap();
+    value["protectedDirDelete"]=serde_json::json!({"outcome":"NOT_TRIED"});
+    assert!(serde_json::from_value::<FileOperations>(value).is_err());
+    let mut f=codex_frame(Case::CodexFileOperations);let mut s=parse_script(&f).unwrap();s.file_operations=None;
+    set_script(&mut f,&s);assert!(parse_script(&f).is_err());
+    let mut value=serde_json::to_value(passing_file_operations()).unwrap();value.as_object_mut().unwrap().remove("protectedFileRename");
+    assert!(serde_json::from_value::<FileOperations>(value).is_err());
+}
+#[test] fn destructive_probe_needs_access_denial_not_sharing_missing_or_nonempty() {
+    assert!(denied_mutation().mutation_denial());
+    let errno=Probe::PermissionDenied {winerror:None,errno:Some(13),error_type:Some("PermissionError".into())};
+    assert!(errno.mutation_denial());
+    for code in [2,3,32,145,10013] {
+        let p=Probe::PermissionDenied {winerror:Some(code),errno:Some(13),error_type:Some("PermissionError".into())};
+        assert!(!p.mutation_denial());let mut operations=passing_file_operations();operations.protected_dir_delete=p;
+        assert_eq!(operations.verdict(),Verdict::Inconclusive);
+    }
+    let mut operations=passing_file_operations();assert_eq!(operations.verdict(),Verdict::ObservedPass);
+    operations.protected_file_rename=Probe::Success;assert_eq!(operations.verdict(),Verdict::PolicyBoundaryFail);
+    operations.protected_file_delete=Probe::Inconclusive {winerror:Some(2),errno:Some(2),error_type:Some("FileNotFoundError".into())};
+    assert_eq!(operations.verdict(),Verdict::PolicyBoundaryFail);
+}
+#[test] fn codex_late_preparation_is_authenticated_post_admission_pre_resume() {
+    let broker=include_str!("../src/python_isolation/broker.rs");
+    let prepare=broker.find("prepare_codex_fixtures(&lab::VerifiedCodexIdentity").unwrap();
+    assert!(broker.find("AdmittedLaunch::prepare_under_lease").unwrap()<prepare);
+    assert!(broker.find("let payload = lease.helper_payload").unwrap()<prepare);
+    assert!(prepare<broker.find("ResumeThread(helper.thread.raw())").unwrap());
+    assert!(broker.contains("token::get_user_sid_bytes(base.raw())? == winutil::sid_bytes_from_string(&helper.account_sid)?"));
+    assert!(broker.contains("config.actual_logon_sid==actual_logon_sid && config.matches"));
+    let driver=include_str!("../examples/python_isolation_acceptance/windows.rs");
+    assert!(driver.contains("python-isolation-codex-fixtures.json"));
+    assert!(driver.contains("protectedMutationObserved"));assert!(driver.contains("KnownExceptionObserved} else {Verdict::PolicyBoundaryFail}"));
+    assert!(driver.contains("\"absoluteWorkspaceWriteAcceptance\""));
+}
+#[test] fn codex_protected_targets_are_late_fixed_and_no_handle_survives_the_receipt() {
+    let fixtures=include_str!("../src/python_isolation/codex_fixtures.rs");
+    assert!(fixtures.contains("pub fn prepare(identity: &VerifiedCodexIdentity) -> Result<Value>"));
+    assert!(fixtures.contains("acl::add_deny_write_ace(target.path(), roles.capability_sid.as_ptr())?"));
+    assert!(fixtures.contains("ace.sid == capability && ace.mask == DENY_WRITE"));
+    assert!(fixtures.contains("coverage(snapshot, capability, DENY, scope, false) == DENY_WRITE"));
+    assert!(fixtures.contains("require_inherited"));assert!(fixtures.contains("verify_no_delete_child"));
+    assert!(fixtures.find("drop(guard);").unwrap()<fixtures.rfind("empty_protected_directory()?").unwrap());
+    assert!(fixtures.find("All file/directory/guard handles are released here").unwrap()
+        <fixtures.find("receipt[\"targetHandlesReleased\"]").unwrap());
+    for forbidden in ["pub fn new(","SetNamedSecurityInfo", "remove_file(","remove_dir(","impl Drop for Fixture", "GetNamedSecurityInfo"] {
+        assert!(!fixtures.contains(forbidden));
+    }
+    let driver=include_str!("../examples/python_isolation_acceptance/windows.rs");
+    let inspect=driver.split("fn codex_artifacts()").nth(1).unwrap().split("fn run_suite(").next().unwrap();
+    assert!(!inspect.contains("std::fs::read("));
+    assert!(inspect.contains("(&mut file).take(expected.len() as u64+1).read_to_end"));
+    assert!(driver.contains("identitiesMatchPreparedTargets"));
+    assert!(driver.contains("artifact[actual]==*expected"));
+    assert!(driver.contains("if identity_changed {artifact[\"protectedMutationObserved\"]"));
+    assert!(driver.contains("durable Codex fixture receipt readback mismatch"));
 }

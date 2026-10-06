@@ -17,10 +17,12 @@ fn send<T: Serialize>(pipe: &Pipe, value: &T, deadline: Instant) -> Result<()> {
 /// No caller-selected token, executable, arguments, policy paths or network targets.
 pub unsafe fn run_fixed_python_acceptance(
     fixed: FixedRequest, record: &mut dyn FnMut(&Frame) -> Result<()>,
+    #[cfg(feature="lab-python-codex-policy-acceptance")]
+    prepare_codex_fixtures: &mut dyn FnMut(&lab::VerifiedCodexIdentity) -> Result<()>,
     #[cfg(feature="lab-python-logon-sid-comparison")]
     prepare_session_grant: &mut dyn FnMut(&lab::VerifiedSessionIdentity) -> Result<()>,
 ) -> Result<()> {
-    ensure!(fixed.case() == Case::StrictBoundary, "fixed suite initial request required");
+    ensure!(fixed.case() == Case::initial(), "fixed suite initial request required");
     let store_path = Path::new(r"C:\PiSandboxLab\store");
     let helper_exe = Path::new(r"C:\PiSandboxLab\trusted\pi-windows-sandbox.exe");
     let current = Handle::from_raw(token::get_current_token_for_restriction()?)?;
@@ -40,10 +42,21 @@ pub unsafe fn run_fixed_python_acceptance(
     let base = Handle::from_raw(base)?;
     #[cfg(feature="lab-python-logon-sid-comparison")]
     ensure!(lab::observer::restricting_sids(base.raw())?.is_empty(),"session broker requires unrestricted authenticated helper base");
-    #[cfg(feature="lab-python-logon-sid-comparison")]
+    #[cfg(any(feature="lab-python-logon-sid-comparison",feature="lab-python-codex-policy-acceptance"))]
     let actual_logon_sid=winutil::string_from_sid_bytes(&token::get_logon_sid_bytes(base.raw())?).map_err(anyhow::Error::msg)?;
     let lease = AdmittedLaunch::prepare_under_lease(&base, &helper.account_sid, fixed.into_request(), &account_lease)?;
     let payload = lease.helper_payload(parent_wait_handle);
+    #[cfg(feature="lab-python-codex-policy-acceptance")]
+    {
+        ensure!(token::get_user_sid_bytes(base.raw())? == winutil::sid_bytes_from_string(&helper.account_sid)?,
+            "Codex fixture identity must match authenticated suspended helper");
+        ensure!(lab::observer::restricting_sids(base.raw())?.is_empty() && actual_logon_sid.starts_with("S-1-5-5-"),
+            "Codex fixture requires original authenticated logon base");
+        // Admission has completed and pins only preexisting inputs. These two
+        // targets are deliberately created late so sharing locks cannot prove denial.
+        prepare_codex_fixtures(&lab::VerifiedCodexIdentity {owner_sid:owner.clone(),account_sid:helper.account_sid.clone(),
+            capability_sid:payload.capability_sid.clone(),actual_logon_sid:actual_logon_sid.clone()})?;
+    }
     ensure!(ResumeThread(helper.thread.raw()) != u32::MAX, "resume Python helper failed");
     let startup = Instant::now() + Duration::from_secs(10);
     pipe.connect(helper.pid, startup)?;
@@ -62,6 +75,12 @@ pub unsafe fn run_fixed_python_acceptance(
             let config=frame.session_token.as_ref().context("session token readback missing")?;
             ensure!(config.actual_logon_sid==actual_logon_sid && config.matches_capability(&payload.capability_sid),
                 "session token does not match authenticated helper logon");
+        }
+        #[cfg(feature="lab-python-codex-policy-acceptance")]
+        if case.codex() && frame.run.is_some() {
+            let config=frame.codex_token.as_ref().context("original Codex token readback missing")?;
+            ensure!(config.actual_logon_sid==actual_logon_sid && config.matches(&helper.account_sid,&payload.capability_sid),
+                "original Codex token does not match authenticated helper logon");
         }
         // Persist failed loader exits too; never replace strict evidence by pinned success.
         record(&frame)?;
@@ -94,7 +113,7 @@ pub fn fixed_python_isolation_helper_main(name: &str, expected_broker: u32) -> R
     ensure!(expected_broker > 0, "missing trusted broker identity");
     let pipe = Pipe::open(name, expected_broker)?;
     let payload: HelperPayload = receive(&pipe, Instant::now() + Duration::from_secs(10))?;
-    ensure!(FixedRequest::new(payload.request.clone())?.case() == Case::StrictBoundary, "fixed initial Python request required");
+    ensure!(FixedRequest::new(payload.request.clone())?.case() == Case::initial(), "fixed initial Python request required");
     unsafe {
         let parent = duplicate_received_parent_wait_handle(payload.parent_wait_handle)?;
         let base = Handle::from_raw(token::get_current_token_for_restriction()?)?;
@@ -102,9 +121,18 @@ pub fn fixed_python_isolation_helper_main(name: &str, expected_broker: u32) -> R
         let account_sid = setup::local_offline_account_sid()?;
         ensure!(actual == winutil::sid_bytes_from_string(&account_sid)?, "helper is not dedicated Pi account");
         let cap = token::LocalSid::from_string(&payload.capability_sid)?;
+        #[cfg(not(feature="lab-python-codex-policy-acceptance"))]
         let strict = Handle::from_raw(token::create_strict_write_token_from(base.raw(), &[cap.as_ptr()])?)?;
         // Exact pinned constructor; never hybridize or relax ACLs to make a canary pass.
         let pinned = Handle::from_raw(token::create_workspace_write_token_with_caps_and_user_from(base.raw(), &[cap.as_ptr()], &[])?)?;
+        #[cfg(feature="lab-python-codex-policy-acceptance")]
+        let codex_configuration={
+            let configuration=lab::CodexTokenConfiguration {profile:"ORIGINAL_PINNED_CODEX_WRITE_RESTRICTED_V1".into(),
+                actual_logon_sid:winutil::string_from_sid_bytes(&token::get_logon_sid_bytes(base.raw())?).map_err(anyhow::Error::msg)?,
+                restricting_sids:lab::observer::restricting_sids(pinned.raw())?};
+            ensure!(configuration.matches(&account_sid,&payload.capability_sid),"original Codex token readback mismatch");
+            configuration
+        };
         use windows_sys::Win32::System::Diagnostics::Debug::{GetErrorMode, SetErrorMode, SEM_FAILCRITICALERRORS};
         SetErrorMode(GetErrorMode() | SEM_FAILCRITICALERRORS);
         ensure!(GetErrorMode() & SEM_FAILCRITICALERRORS != 0, "critical error mode failed");
@@ -127,7 +155,7 @@ pub fn fixed_python_isolation_helper_main(name: &str, expected_broker: u32) -> R
                         let frame=Frame {case,account_sid:account_sid.clone(),capability_sid:payload.capability_sid.clone(),
                             private_desktop:payload.private_desktop.clone(),run:None,
                             launch_error:Some(format!("candidate token construction failed before launch: {error:#}")),
-                            native:lab::NativeEvidence::default(),candidate_token:None,session_token:None};
+                            native:lab::NativeEvidence::default(),candidate_token:None,session_token:None,codex_token:None};
                         send(&pipe,&frame,Instant::now()+Duration::from_secs(10))?;
                         anyhow::bail!("candidate token unavailable; remaining candidate cases NOT_ATTEMPTED");
                     }
@@ -142,7 +170,7 @@ pub fn fixed_python_isolation_helper_main(name: &str, expected_broker: u32) -> R
                         let frame=Frame {case,account_sid:account_sid.clone(),capability_sid:payload.capability_sid.clone(),
                             private_desktop:payload.private_desktop.clone(),run:None,
                             launch_error:Some(format!("session token construction failed before launch: {error:#}")),
-                            native:lab::NativeEvidence::default(),candidate_token:None,session_token:None};
+                            native:lab::NativeEvidence::default(),candidate_token:None,session_token:None,codex_token:None};
                         send(&pipe,&frame,Instant::now()+Duration::from_secs(10))?;
                         anyhow::bail!("session token unavailable; remaining session cases NOT_ATTEMPTED");
                     }
@@ -150,7 +178,10 @@ pub fn fixed_python_isolation_helper_main(name: &str, expected_broker: u32) -> R
             }
             let fixed = FixedRequest::new(lab::request(case, payload.request.parent_pid, payload.request.policy_hash.clone()))?;
             let mut observer = lab::observer::Observer::new();
+            #[cfg(not(feature="lab-python-codex-policy-acceptance"))]
             let launch_token=if case.pinned() {pinned.raw()} else {strict.raw()};
+            #[cfg(feature="lab-python-codex-policy-acceptance")]
+            let launch_token=pinned.raw();
             #[cfg(feature="lab-python-policy-repair-comparison")]
             let launch_token=if case.candidate() {candidate.as_ref().context("candidate token missing")?.0.raw()} else {launch_token};
             #[cfg(feature="lab-python-logon-sid-comparison")]
@@ -160,6 +191,12 @@ pub fn fixed_python_isolation_helper_main(name: &str, expected_broker: u32) -> R
             let frame = Frame { case, account_sid: account_sid.clone(), capability_sid: payload.capability_sid.clone(),
                 private_desktop: payload.private_desktop.clone(), launch_error: result.as_ref().err().map(|e| format!("{e:#}")),
                 run: result.ok(), native: observer.evidence,
+                codex_token: {
+                    #[cfg(feature="lab-python-codex-policy-acceptance")]
+                    { if case.codex() {Some(codex_configuration.clone())} else {None} }
+                    #[cfg(not(feature="lab-python-codex-policy-acceptance"))]
+                    { None }
+                },
                 candidate_token: {
                     #[cfg(feature="lab-python-policy-repair-comparison")]
                     { if case.candidate() {Some(candidate.as_ref().context("candidate configuration missing")?.1.clone())} else {None} }

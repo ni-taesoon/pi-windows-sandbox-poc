@@ -7,6 +7,7 @@ license = "Apache-2.0"
 [features]
 default = []
 lab-python-isolation-acceptance = []
+lab-python-codex-policy-acceptance = ["lab-python-isolation-acceptance"]
 lab-python-policy-repair-comparison = ["lab-python-isolation-acceptance"]
 lab-python-logon-sid-comparison = ["lab-python-policy-repair-comparison"]
 lab-minimal-load-comparison = []
