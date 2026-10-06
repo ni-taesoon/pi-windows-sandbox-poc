@@ -159,9 +159,9 @@ class SourceContracts(unittest.TestCase):
             'src/acl.rs': 'f8097901f8c17cc45f3593eb6d4cbd46e967e0081fd6c89fb2bd943f4b33c402',
             'src/setup.rs': '0512c223efe10766d852e65007e1582587e6c6f4618b0fb233a38468557f6bed',
             'src/setup/accounts.rs': 'd5c80b98fa4aa53cf486157632cec736ada6e8a2971e8516f120b58ef7b08915',
-            'src/network.rs': 'c215d5851cd4bf47800f104fc114b894ef9521779090fffe7dbd1a396e030bd4',
-            'src/network/firewall.rs': 'c92c6c9f49708349d17e4bc473151dadd0f82dc5cd5d7ce6812702669ec5cf8c',
-            'src/network/wfp.rs': 'e2623e15b0dbaf3a32e6e42237806b0eb09c2aa2efc185491d11b97537cdad6a',
+            'src/network.rs': 'ef548c44b516e838b8fa8c6a4d64035df0b574e55e17f0cec7a719f90bb7fd96',
+            'src/network/firewall.rs': 'ca5364770848493b93ccf8ab2b0d0c501244e04755c58f75d544c139c30139ca',
+            'src/network/wfp.rs': 'ceb362c66d24237733ff06ccee58fb445135075ee2730093920a1a8bd9a249b8',
         }
         for name, digest in expected.items():
             with self.subTest(name=name):

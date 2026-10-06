@@ -15,14 +15,21 @@ param(
   [string]$ExpectedPythonSha256,
   [string]$ApprovedSourceSha256,
   [string]$SourceCommit,
-  [switch]$CodexPolicyAcceptance
+  [switch]$CodexPolicyAcceptance,
+  [switch]$OnlinePdfAcceptance,
+  [string]$ExpectedOnlinePdfFixtureSha256,
+  [string]$ExpectedOnlinePdfRelaySha256,
+  [string]$ExpectedOnlinePdfPackagesSha256,
+  [string]$ExpectedOnlinePdfRequirementsSha256
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if (-not $ApprovedDisposableVm) { throw 'Explicit disposable VM security-change approval required.' }
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_OS -ne 'Windows') { throw 'This lab requires a fresh GitHub-hosted Windows runner.' }
 if ($env:GITHUB_REPOSITORY -cne 'ni-taesoon/pi-windows-sandbox-poc') { throw 'Unexpected repository.' }
-if ($CodexPolicyAcceptance) {
+if ($OnlinePdfAcceptance) {
+  if (-not $CodexPolicyAcceptance -or $env:GITHUB_REF -cne 'refs/heads/lab/python-online-pdf-acceptance') { throw 'Online PDF requires its exact reviewed profile and branch.' }
+} elseif ($CodexPolicyAcceptance) {
   if ($env:GITHUB_REF -cne 'refs/heads/lab/codex-python-policy-acceptance') { throw 'Only the fixed Codex-policy branch may select this profile.' }
 } elseif ($env:GITHUB_REF -cne 'refs/heads/lab/python-isolation-acceptance') { throw 'Unexpected comparison lab branch.' }
 if ($env:GITHUB_SHA -cnotmatch '\A[0-9a-f]{40}\z') { throw 'Immutable event SHA required.' }
@@ -110,6 +117,14 @@ if ($Phase -eq 'Stage') {
     [pscustomobject]@{ source=(Join-Path $build 'examples\python_isolation_acceptance.exe'); name='python_isolation_acceptance.exe'; hash=$ExpectedDriverSha256; role='isolation-driver' },
     [pscustomobject]@{ source=(Join-Path $PSScriptRoot 'python-isolation-fixture.py'); name='python-isolation-fixture.py'; hash=$ExpectedFixtureSha256; role='fixed-fixture' }
   )
+  if ($OnlinePdfAcceptance) {
+    $files += @(
+      [pscustomobject]@{ source=(Join-Path $PSScriptRoot 'python-online-pdf-fixture.py'); name='python-online-pdf-fixture.py'; hash=$ExpectedOnlinePdfFixtureSha256; role='fixed-online-pdf-fixture' },
+      [pscustomobject]@{ source=(Join-Path $PSScriptRoot 'python-online-pdf-relay.py'); name='python-online-pdf-relay.py'; hash=$ExpectedOnlinePdfRelaySha256; role='fixed-online-pdf-relay' },
+      [pscustomobject]@{ source=(Join-Path $PSScriptRoot 'python-online-pdf-packages.json'); name='python-online-pdf-packages.json'; hash=$ExpectedOnlinePdfPackagesSha256; role='fixed-online-pdf-packages' },
+      [pscustomobject]@{ source=(Join-Path $PSScriptRoot 'python-online-pdf-requirements.txt'); name='python-online-pdf-requirements.txt'; hash=$ExpectedOnlinePdfRequirementsSha256; role='fixed-online-pdf-requirements' }
+    )
+  }
   foreach ($file in $files) { Assert-FixedFile -Path $file.source -Hash $file.hash -Role $file.role }
   $selection = Get-PythonIsolationRuntimeEntries -SourceRoot $PythonHome
   Assert-FixedFile -Path (Join-Path $selection.root 'python.exe') -Hash $ExpectedPythonSha256 -Role 'official-python-executable'
@@ -181,6 +196,11 @@ if ($Phase -eq 'Stage') {
     fixtureSha256=$ExpectedFixtureSha256.ToLowerInvariant(); pythonSha256=$ExpectedPythonSha256.ToLowerInvariant();
     runtimeManifestSha256=(Get-FileHash -LiteralPath $runtimeManifest -Algorithm SHA256).Hash.ToLowerInvariant();
     runtimeFileCount=$inputs.Count; pythonVersion='3.12.10'; pythonFileVersion=$pythonFileVersion;
+    onlinePdfAcceptance=[bool]$OnlinePdfAcceptance;
+    onlinePdfFixtureSha256=$(if ($OnlinePdfAcceptance) { $ExpectedOnlinePdfFixtureSha256.ToLowerInvariant() } else { $null });
+    onlinePdfRelaySha256=$(if ($OnlinePdfAcceptance) { $ExpectedOnlinePdfRelaySha256.ToLowerInvariant() } else { $null });
+    onlinePdfPackagesSha256=$(if ($OnlinePdfAcceptance) { $ExpectedOnlinePdfPackagesSha256.ToLowerInvariant() } else { $null });
+    onlinePdfRequirementsSha256=$(if ($OnlinePdfAcceptance) { $ExpectedOnlinePdfRequirementsSha256.ToLowerInvariant() } else { $null });
     codexPolicyAcceptance=[bool]$CodexPolicyAcceptance; outsidePrivateOwnerOnly=[bool]$CodexPolicyAcceptance;
     outsideLogonInitiallyProtected=(-not [bool]$CodexPolicyAcceptance);
     outsideLogonGrantOwner=$(if ($CodexPolicyAcceptance) { 'NOT_STAGED' } else { 'native-verified-helper-logon-only' }); nativeValidated=$false
@@ -192,11 +212,18 @@ Assert-LabSourceAncestors -Path $stageEvidence -Role 'stage-evidence'
 if ((Get-Item -LiteralPath $stageEvidence -Force).PSIsContainer -or (Get-Item -LiteralPath $stageEvidence -Force).Length -gt 65536) { throw 'Invalid stage evidence.' }
 $stage = Get-Content -LiteralPath $stageEvidence -Raw | ConvertFrom-Json
 if ($stage.codexPolicyAcceptance -ne [bool]$CodexPolicyAcceptance) { throw 'Staged laboratory profile mismatch.' }
+if ($stage.onlinePdfAcceptance -ne [bool]$OnlinePdfAcceptance) { throw 'Staged online-PDF profile mismatch.' }
 if ($stage.scope -cne 'LAB_PYTHON_ISOLATION_ACCEPTANCE' -or $stage.nativeValidated -ne $false -or $stage.sourceCommit -cne $env:GITHUB_SHA) { throw 'Unexpected stage identity.' }
 Assert-FixedFile -Path $driver -Hash $stage.driverSha256 -Role 'staged-isolation-driver'
 # Disable requires only its hash-bound driver and stage identity. A changed or
 # missing Python/input must not prevent attempting authenticated owned-SID disable.
 if ($Phase -ne 'Disable') {
+  if ($OnlinePdfAcceptance) {
+    Assert-FixedFile -Path "$trusted\python-online-pdf-fixture.py" -Hash $stage.onlinePdfFixtureSha256 -Role 'staged-online-pdf-fixture'
+    Assert-FixedFile -Path "$trusted\python-online-pdf-relay.py" -Hash $stage.onlinePdfRelaySha256 -Role 'staged-online-pdf-relay'
+    Assert-FixedFile -Path "$trusted\python-online-pdf-packages.json" -Hash $stage.onlinePdfPackagesSha256 -Role 'staged-online-pdf-packages'
+    Assert-FixedFile -Path "$trusted\python-online-pdf-requirements.txt" -Hash $stage.onlinePdfRequirementsSha256 -Role 'staged-online-pdf-requirements'
+  }
   Assert-FixedFile -Path "$trusted\pi-windows-sandbox.exe" -Hash $stage.helperSha256 -Role 'staged-helper-executable'
   Assert-FixedFile -Path "$trusted\python-isolation-fixture.py" -Hash $stage.fixtureSha256 -Role 'staged-fixed-fixture'
   Assert-FixedFile -Path "$runtime\python.exe" -Hash $stage.pythonSha256 -Role 'staged-python-executable'

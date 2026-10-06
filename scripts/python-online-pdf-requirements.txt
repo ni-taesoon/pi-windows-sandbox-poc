@@ -1,0 +1,4 @@
+# Fixed online relay routes, never an offline wheelhouse or an arbitrary index.
+reportlab @ http://127.0.0.1:43873/wheels/reportlab-5.0.1-py3-none-any.whl --hash=sha256:1c36e6bb0e71780c72331eba60da7f602e8d4389a8723825af71342e49d791e8
+pillow @ http://127.0.0.1:43873/wheels/pillow-12.3.0-cp312-cp312-win_amd64.whl --hash=sha256:a2b55dd6b2a4c4b7d87ffa56bdb33fdc5fdb9a462173861a7bc097f17d91cb09
+charset-normalizer @ http://127.0.0.1:43873/wheels/charset_normalizer-3.5.2-py3-none-any.whl --hash=sha256:b6b751274acb69d77b3323d6b7dbaa3c7fdfc1eb829b7eb61d262f32e1af9685

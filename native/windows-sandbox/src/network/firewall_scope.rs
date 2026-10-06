@@ -176,6 +176,34 @@ mod tests {
         assert_eq!(validate(&scope, &scope), Ok(()));
     }
     #[test]
+    fn fixed_online_relay_complement_requires_exact_readback() {
+        let mut online = expected();
+        online.remote_ports = "1-43872,43874-65535".into();
+        assert_eq!(validate(&online, &online), Ok(()));
+        for ports in [
+            "*", "", "1-65535", "1-43871,43874-65535", "1-43872,43875-65535",
+            "43873", "1-43872", "43874-65535", "1-43872,43873-65535",
+        ] {
+            let mut actual = online.clone();
+            actual.remote_ports = ports.into();
+            assert!(validate(&actual, &online).is_err(), "accepted changed relay complement {ports}");
+        }
+        // The new profile cannot adopt the old wildcard rule or vice versa.
+        assert!(validate(&expected(), &online).is_err());
+        assert!(validate(&online, &expected()).is_err());
+        for field in ["user", "protocol", "direction", "remote_addresses"] {
+            let mut actual = online.clone();
+            match field {
+                "user" => actual.user = "O:LSD:(A;;CC;;;S-1-5-21-9999)".into(),
+                "protocol" => actual.protocol = 17,
+                "direction" => actual.direction = 1,
+                "remote_addresses" => actual.remote_addresses = "127.0.0.1".into(),
+                _ => unreachable!(),
+            }
+            assert!(validate(&actual, &online).is_err(), "accepted changed {field}");
+        }
+    }
+    #[test]
     fn rejects_unexpected_application() {
         let expected = expected();
         let mut actual = expected.clone();
