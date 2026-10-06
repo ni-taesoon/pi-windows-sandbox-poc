@@ -6,6 +6,7 @@ license = "Apache-2.0"
 [workspace]
 [features]
 default = []
+lab-python-isolation-acceptance = []
 lab-minimal-load-comparison = []
 lab-pinned-codex-token-comparison = ["lab-minimal-load-comparison"]
 lab-loader-trace = []

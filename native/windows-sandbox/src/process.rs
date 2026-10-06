@@ -170,6 +170,8 @@ pub(crate) unsafe fn run_restricted_with_parent(
         parent,
         #[cfg(feature = "lab-loader-trace")]
         None,
+        #[cfg(feature = "lab-python-isolation-acceptance")]
+        None,
     )
 }
 #[cfg(feature = "lab-loader-trace")]
@@ -195,6 +197,8 @@ pub(crate) unsafe fn run_fixed_account_control(
 }
 #[derive(Clone, Copy)]
 enum ChildLaunch {
+    #[cfg(feature = "lab-python-isolation-acceptance")]
+    FixedPythonAccountControl,
     Restricted(HANDLE),
     #[cfg(feature = "lab-minimal-load-comparison")]
     FixedAccountControl,
@@ -205,9 +209,14 @@ unsafe fn run_impl(
     request: &RunRequest,
     parent: &Handle,
     #[cfg(feature = "lab-loader-trace")] trace: Option<&mut crate::loader_trace::LoaderTrace>,
+    #[cfg(feature = "lab-python-isolation-acceptance")] mut observer: Option<&mut crate::python_isolation::observer::Observer>,
 ) -> Result<RunResult> {
     request.validate()?;
     match launch {
+        #[cfg(feature = "lab-python-isolation-acceptance")]
+        ChildLaunch::FixedPythonAccountControl => {
+            ensure!(crate::python_isolation::FixedRequest::new(request.clone())?.case() == crate::python_isolation::Case::OrdinaryOutside, "ordinary Python control exceeds scope");
+        }
         ChildLaunch::Restricted(token) => ensure!(token != 0 && token != INVALID_HANDLE_VALUE, "invalid token"),
         #[cfg(feature = "lab-minimal-load-comparison")]
         ChildLaunch::FixedAccountControl => {
@@ -279,7 +288,13 @@ unsafe fn run_impl(
         } else {
             0
         };
+    #[cfg(feature = "lab-python-isolation-acceptance")]
+    let creation_flags = creation_flags | if observer.is_some() { CREATE_SUSPENDED } else { 0 };
     let created = match launch {
+        #[cfg(feature = "lab-python-isolation-acceptance")]
+        ChildLaunch::FixedPythonAccountControl => CreateProcessW(
+            executable.as_ptr(), command.as_mut_ptr(), null(), null(), 1, creation_flags,
+            env.as_ptr().cast::<c_void>(), cwd.as_ptr(), &startup.StartupInfo, &mut info),
         ChildLaunch::Restricted(token) => CreateProcessAsUserW(
             token,
             executable.as_ptr(),
@@ -310,6 +325,11 @@ unsafe fn run_impl(
     win(created)?;
     let process = Handle::from_raw(info.hProcess)?;
     let _thread = Handle::from_raw(info.hThread)?;
+    #[cfg(feature = "lab-python-isolation-acceptance")]
+    if let Some(observer) = observer.as_deref_mut() {
+        observer.root(&process, info.dwProcessId, info.dwThreadId, &job);
+        ensure!(ResumeThread(_thread.raw()) != u32::MAX, "fixed Python resume failed");
+    }
     drop(stdin_read);
     drop(stdout_write);
     drop(stderr_write);
@@ -340,6 +360,8 @@ unsafe fn run_impl(
     let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
     let (mut timed_out, mut truncated) = (false, false);
     let loop_result: Result<StopReason> = (|| loop {
+        #[cfg(feature = "lab-python-isolation-acceptance")]
+        if let Some(observer) = observer.as_deref_mut() { observer.poll(&process, &job); }
         #[cfg(feature = "lab-loader-trace")]
         if let Some(debugger) = &mut debugger {
             debugger.poll(0)?;
@@ -420,6 +442,8 @@ unsafe fn run_impl(
     if let Some(debugger) = &mut debugger {
         debugger.verified_cleanup();
     }
+    #[cfg(feature = "lab-python-isolation-acceptance")]
+    if let Some(observer) = observer.as_deref_mut() { observer.finish(&job); }
     let stop_reason = loop_result?;
     let mut exit_code = 1;
     win(GetExitCodeProcess(process.raw(), &mut exit_code))?;
@@ -460,4 +484,16 @@ unsafe fn run_impl(
         terminated: true,
         cleanup_verified: true,
     })
+}
+
+/// Fixed lab wrapper; ordinary launch is limited to the outside-world baseline.
+#[cfg(feature = "lab-python-isolation-acceptance")]
+pub(crate) unsafe fn run_fixed_python(
+    token: HANDLE, private_desktop: &str, fixed: &crate::python_isolation::FixedRequest,
+    parent: &Handle, observer: &mut crate::python_isolation::observer::Observer,
+) -> Result<RunResult> {
+    let launch = if fixed.case() == crate::python_isolation::Case::OrdinaryOutside {
+        ChildLaunch::FixedPythonAccountControl
+    } else { ChildLaunch::Restricted(token) };
+    run_impl(launch, private_desktop, fixed.request(), parent, Some(observer))
 }

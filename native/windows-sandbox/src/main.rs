@@ -40,6 +40,18 @@ fn main() {
         }
         return;
     }
+    #[cfg(all(windows, feature = "lab-python-isolation-acceptance"))]
+    if args.first().is_some_and(|arg| arg == "internal-fixed-python-isolation-helper") {
+        let result = (|| -> anyhow::Result<()> {
+            anyhow::ensure!(args.len() == 3, "invalid fixed Python helper arguments");
+            pi_windows_sandbox::broker::fixed_python_isolation_helper_main(&args[1], args[2].parse()?)
+        })();
+        if let Err(error) = result {
+            eprintln!("fixed Python helper failed: {error:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if args == ["status"] {
         println!(
             "{}",
