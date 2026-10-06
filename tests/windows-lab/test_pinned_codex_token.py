@@ -44,7 +44,7 @@ class PinnedTokenContracts(unittest.TestCase):
                 if name.endswith('src/token.rs'):
                     # Strip only the exact new default-off module hook; original
                     # constructor bytes must still match their pinned old hash.
-                    hook = b'\n// The composed repair experiment is never available through the product policy.\n#[cfg(feature = "lab-python-policy-repair-comparison")]\n#[path = "python_isolation/token_candidate.rs"]\nmod python_policy_repair_candidate;\n#[cfg(feature = "lab-python-policy-repair-comparison")]\npub(crate) use python_policy_repair_candidate::create_lab_policy_repair_token_from;\n'
+                    hook = b'\n// The composed repair experiment is never available through the product policy.\n#[cfg(feature = "lab-python-policy-repair-comparison")]\n#[path = "python_isolation/token_candidate.rs"]\nmod python_policy_repair_candidate;\n#[cfg(feature = "lab-python-policy-repair-comparison")]\npub(crate) use python_policy_repair_candidate::create_lab_policy_repair_token_from;\n#[cfg(feature = "lab-python-logon-sid-comparison")]\npub(crate) use python_policy_repair_candidate::create_lab_logon_session_token_from;\n'
                     self.assertTrue(data.endswith(hook))
                     data = data[:-len(hook)]
                 self.assertEqual(hashlib.sha256(data).hexdigest(), digest)

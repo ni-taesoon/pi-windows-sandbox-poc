@@ -104,11 +104,62 @@ class IsolationFixtureTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 fixture.main()
 
+    def test_only_session_boundary_probes_authorized_fixed_logon_leaf(self):
+        for label in ("strict", "pinned", "candidate", "session"):
+            with self.subTest(label=label), \
+                    patch.object(fixture.sys, "platform", "win32"), \
+                    patch.object(fixture.sys, "version_info", (3, 12, 10)), \
+                    patch.object(fixture.sys, "argv", ["fixture.py", label + "-boundary"]), \
+                    patch.object(fixture.sys, "executable", str(fixture.ROOT / "runtime" / "python.exe")), \
+                    patch.object(fixture.pathlib.Path, "cwd", return_value=fixture.WORK), \
+                    patch.object(fixture.pathlib.Path, "open"), \
+                    patch.object(fixture, "read_exact"), patch.object(fixture, "write_new") as write, \
+                    patch.object(fixture, "connect") as connect, patch.object(fixture.os, "fsync"), \
+                    patch("builtins.print") as output:
+                fixture.main()
+                logon_calls = [call for call in write.call_args_list
+                               if "outside-logon" in call.args[0].parts]
+                self.assertEqual(len(logon_calls), int(label == "session"))
+                result = fixture.json.loads(output.call_args.args[0])
+                self.assertEqual("sessionGrantWrite" in result, label == "session")
+                if label == "session":
+                    self.assertEqual(logon_calls[0].args, (
+                        fixture.ROOT / "fixtures" / "outside-logon" / "session-write.txt",
+                        b"AUTHORIZED_SESSION_GRANT_OBSERVED\n"))
+                    self.assertEqual(result["sessionGrantWrite"], {"outcome": "SUCCESS"})
+                write.assert_any_call(fixture.OUTSIDE / (label + "-write.txt"),
+                                      b"SYNTHETIC_OUTSIDE_WRITE\n")
+                self.assertEqual(connect.call_count, 2)
+
+    def test_session_child_keeps_fixed_child_and_no_filesystem_or_network_probes(self):
+        for mode in ("session-child-normal-exit", "session-child-timeout"):
+            with self.subTest(mode=mode), \
+                    patch.object(fixture.sys, "platform", "win32"), \
+                    patch.object(fixture.sys, "version_info", (3, 12, 10)), \
+                    patch.object(fixture.sys, "argv", ["fixture.py", mode]), \
+                    patch.object(fixture.sys, "executable", str(fixture.ROOT / "runtime" / "python.exe")), \
+                    patch.object(fixture.pathlib.Path, "cwd", return_value=fixture.WORK), \
+                    patch.object(fixture, "read_exact", side_effect=AssertionError("file read")), \
+                    patch.object(fixture, "write_new", side_effect=AssertionError("file write")), \
+                    patch.object(fixture, "connect", side_effect=AssertionError("network")), \
+                    patch.object(fixture.subprocess, "Popen") as spawn, \
+                    patch.object(fixture.time, "sleep") as sleep, patch("builtins.print") as output:
+                fixture.main()
+                spawn.assert_called_once_with([str(fixture.ROOT / "runtime" / "python.exe"),
+                    "-I", "-S", "-B", str(fixture.ROOT / "trusted" / "python-isolation-fixture.py"),
+                    "descendant-hold"], stdin=fixture.subprocess.DEVNULL,
+                    stdout=fixture.subprocess.DEVNULL, stderr=fixture.subprocess.DEVNULL, close_fds=True)
+                sleep.assert_called_once_with(60 if mode.endswith("timeout") else 3)
+                result = fixture.json.loads(output.call_args.args[0])
+                self.assertEqual(result["marker"], "CHILD_STARTED")
+                self.assertNotIn("sessionGrantWrite", result)
+
     def test_fixture_has_only_declared_modes_and_endpoints(self):
         self.assertEqual(fixture.MODES, frozenset(("ordinary-outside", "strict-boundary",
             "strict-child-normal-exit", "strict-child-timeout", "pinned-boundary",
             "pinned-child-normal-exit", "pinned-child-timeout", "candidate-boundary",
-            "candidate-child-normal-exit", "candidate-child-timeout", "descendant-hold")))
+            "candidate-child-normal-exit", "candidate-child-timeout", "session-boundary",
+            "session-child-normal-exit", "session-child-timeout", "descendant-hold")))
         source = SOURCE.read_text()
         self.assertNotIn("getaddrinfo(", source)
         self.assertNotIn("gethostbyname(", source)

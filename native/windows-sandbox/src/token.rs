@@ -585,3 +585,5 @@ mod token_groups_tests;
 mod python_policy_repair_candidate;
 #[cfg(feature = "lab-python-policy-repair-comparison")]
 pub(crate) use python_policy_repair_candidate::create_lab_policy_repair_token_from;
+#[cfg(feature = "lab-python-logon-sid-comparison")]
+pub(crate) use python_policy_repair_candidate::create_lab_logon_session_token_from;

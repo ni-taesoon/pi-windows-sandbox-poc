@@ -1,9 +1,14 @@
 """Portable, read-only source contracts; no fixture execution or Windows claims.
 
-Only standard-library text/AST inspection runs here. These tests neither execute
-PowerShell nor start native/Python canaries, open sockets, or modify security.
+Standard-library inspection plus pure PowerShell normalization of synthetic values
+when pwsh is installed. Never queries firewall rules, starts native/Python canaries,
+opens sockets, reads account stores, or modifies security.
 """
 import ast
+import os
+import shutil
+import subprocess
+import textwrap
 from pathlib import Path
 import re
 import unittest
@@ -27,6 +32,11 @@ EVIDENCE_JSON = {
     'python-isolation-candidate-boundary.json',
     'python-isolation-candidate-child-normal-exit.json',
     'python-isolation-candidate-child-timeout.json',
+    'python-isolation-session-boundary.json',
+    'python-isolation-session-child-normal-exit.json',
+    'python-isolation-session-child-timeout.json',
+    'python-isolation-session-grant-created.json',
+    'python-isolation-session-grant-cleanup.json',
     'python-isolation-run.json',
     'python-isolation-recovery.json',
     'python-isolation-summary.json',
@@ -110,13 +120,14 @@ class PythonIsolationWorkflowContracts(unittest.TestCase):
 
     def test_default_and_feature_checks_and_pure_tests_precede_security(self):
         source = self.workflow
-        first_stage = source.index('      - name: Stage fixed protected lab')
+        first_stage = source.index('        id: stage')
         for required in [
             'cargo check --locked --no-default-features --target',
             'cargo check --locked --no-default-features --features lab-python-isolation-acceptance',
             'cargo check --locked --no-default-features --features lab-python-policy-repair-comparison',
-            'cargo build --locked --no-default-features --features lab-python-policy-repair-comparison',
-            'cargo test --locked --no-default-features --features lab-python-policy-repair-comparison',
+            'cargo check --locked --no-default-features --features lab-python-logon-sid-comparison',
+            'cargo build --locked --no-default-features --features lab-python-logon-sid-comparison',
+            'cargo test --locked --no-default-features --features lab-python-logon-sid-comparison',
             '--test python_isolation_contract',
             '--test admission_policy_contract',
             '--test wfp_offline_scope_contract',
@@ -147,6 +158,7 @@ class PythonIsolationWorkflowContracts(unittest.TestCase):
             'native/windows-sandbox/src/python_isolation/broker.rs',
             'native/windows-sandbox/src/python_isolation/observer.rs',
             'native/windows-sandbox/src/python_isolation/token_candidate.rs',
+            'native/windows-sandbox/src/python_isolation/session_grant.rs',
             'native/windows-sandbox/src/token.rs',
             'native/windows-sandbox/src/network.rs',
             'native/windows-sandbox/src/network/wfp.rs',
@@ -202,7 +214,7 @@ class PythonIsolationWorkflowContracts(unittest.TestCase):
 
     def firewall_observation(self):
         return self.workflow.split('      - name: Observe only five owned ActiveStore rules', 1)[1].split(
-            '      - name: Run fixed ordinary control', 1)[0]
+            '      - name:', 1)[0]
 
     def test_optional_firewall_metadata_cannot_replace_or_gate_runtime(self):
         source = self.workflow
@@ -322,6 +334,102 @@ class PythonIsolationWorkflowContracts(unittest.TestCase):
         self.assertIn("'17' { return 'UDP' }", observation)
         self.assertIn("'256' { return 'Any' }", observation)
 
+    def test_firewall_sentinels_only_classify_actual_strings(self):
+        observation = self.firewall_observation()
+        fact = observation.split('function Read-Fact(', 1)[1].split('function Enforcement-Value(', 1)[0]
+        self.assertIn("$_ -is [string] -and @('UNKNOWN', 'Unknown', 'OTHER_OR_UNKNOWN') -ccontains $_", fact)
+        self.assertNotIn("$values -ccontains 'UNKNOWN'", fact)
+        self.assertNotIn("$values -ccontains 'Unknown'", fact)
+        self.assertNotIn("$values -ccontains 'OTHER_OR_UNKNOWN'", fact)
+        self.assertIn("else { $fact = Diagnostic $Stage 'OBSERVED' 'NONE' }", fact)
+
+    def test_firewall_enforcement_numeric_map_is_documented_and_bounded(self):
+        observation = self.firewall_observation()
+        expected = [
+            'Invalid', 'Full', 'FirewallOffInProfile', 'CategoryOff', 'DisabledObject',
+            'InactiveProfile', 'LocalAddressResolutionEmpty', 'RemoteAddressResolutionEmpty',
+            'LocalPortResolutionEmpty', 'RemotePortResolutionEmpty', 'InterfaceResolutionEmpty',
+            'ApplicationResolutionEmpty', 'RemoteMachineEmpty', 'RemoteUserEmpty',
+            'LocalGlobalOpenPortsDisallowed', 'LocalAuthorizedApplicationsDisallowed',
+            'LocalFirewallRulesDisallowed', 'LocalConsecRulesDisallowed', 'NotTargetPlatform',
+            'OptimizedOut', 'LocalUserEmpty', 'TransportMachinesEmpty', 'TunnelMachinesEmpty',
+            'TupleResolutionEmpty',
+        ]
+        assignment = next(line for line in observation.splitlines()
+                          if line.strip().startswith('$enforcementEnums ='))
+        self.assertEqual(re.findall(r"'([^']+)'", assignment), expected)
+        helper = observation.split('function Enforcement-Value(', 1)[1].split('function Protocol-Value(', 1)[0]
+        self.assertIn("if ($Value -is [bool]) { return 'UNKNOWN' }", helper)
+        self.assertIn(r"\A(?:[0-9]|1[0-9]|2[0-3])\z", helper)
+        self.assertIn('$enforcementEnums[[int]$text]', helper)
+        self.assertIn('https://learn.microsoft.com/en-us/windows/win32/fwp/wmi/wfascimprov/msft-netfirewallrule', helper)
+        self.assertIn('ForEach-Object { Enforcement-Value $_ }', observation)
+        self.assertIn('UNKNOWN in earlier artifacts does not identify any previous code.', helper)
+
+    def test_actual_powershell_normalization_helpers_with_only_synthetic_values(self):
+        observation = self.firewall_observation()
+        definitions = []
+        # Extract ONLY these normalization definitions, never the query loop,
+        # baseline/store readers, fixture driver or optional firewall commands.
+        for name in ['Safe-Enum', 'Diagnostic', 'Read-Fact', 'Enforcement-Value', 'Expected-Match']:
+            pattern = rf'(?ms)^          function {re.escape(name)}\([^\n]*\) \{{\n.*?^          \}}\n'
+            matches = re.findall(pattern, observation)
+            self.assertEqual(len(matches), 1, name)
+            definitions.append(textwrap.dedent(matches[0]))
+        assignments = []
+        for variable in ['$enforcementEnums =', '$factEnums =']:
+            lines = [line.strip() for line in observation.splitlines() if line.strip().startswith(variable)]
+            self.assertEqual(len(lines), 1, variable)
+            assignments.append(lines[0])
+        script = "$ErrorActionPreference = 'Stop'\n" + '\n'.join(definitions + assignments) + r'''
+function Assert-Synthetic([bool]$Condition) { if (-not $Condition) { throw 'PURE_NORMALIZATION_REGRESSION' } }
+$yes = Read-Fact 'TEST_TRUE' { $true }
+$no = Read-Fact 'TEST_FALSE' { $false }
+Assert-Synthetic ($yes.status -ceq 'OBSERVED' -and $yes.reason -ceq 'NONE' -and $yes.value -is [bool] -and $yes.value -eq $true)
+Assert-Synthetic ($no.status -ceq 'OBSERVED' -and $no.reason -ceq 'NONE' -and $no.value -is [bool] -and $no.value -eq $false)
+Assert-Synthetic ((Expected-Match $yes $true) -eq $true)
+Assert-Synthetic ((Expected-Match $no $true) -eq $false)
+$pair = Read-Fact 'TEST_BOOLEAN_PAIR' { $true; $false }
+Assert-Synthetic ($pair.status -ceq 'OBSERVED' -and $pair.value.Count -eq 2 -and $pair.value[0] -is [bool] -and $pair.value[1] -is [bool])
+foreach ($sentinel in @('UNKNOWN', 'Unknown', 'OTHER_OR_UNKNOWN')) {
+  $fact = Read-Fact 'TEST_SENTINEL' { $sentinel }
+  Assert-Synthetic ($fact.status -ceq 'INCONCLUSIVE' -and $fact.reason -ceq 'UNRECOGNIZED_VALUE')
+}
+$mixed = Read-Fact 'TEST_MIXED' { $true; 'UNKNOWN' }
+Assert-Synthetic ($mixed.status -ceq 'INCONCLUSIVE' -and $mixed.value[0] -is [bool])
+foreach ($index in 0..23) {
+  $numeric = Read-Fact 'TEST_NUMERIC' { Enforcement-Value ([uint16]$index) }
+  $text = Read-Fact 'TEST_NUMERIC_STRING' { Enforcement-Value ([string]$index) }
+  Assert-Synthetic ($numeric.status -ceq 'OBSERVED' -and $numeric.value -ceq $enforcementEnums[$index])
+  Assert-Synthetic ($text.status -ceq 'OBSERVED' -and $text.value -ceq $enforcementEnums[$index])
+}
+foreach ($name in @('Full', 'NotApplicable', 'Invalid', 'TupleResolutionEmpty')) {
+  $named = Read-Fact 'TEST_NAMED' { Enforcement-Value $name }
+  Assert-Synthetic ($named.status -ceq 'OBSERVED' -and $named.value -ceq $name)
+}
+foreach ($unknown in @(-1, 24, 65535, 'not-a-status', $true, $false)) {
+  $unknownFact = Read-Fact 'TEST_UNKNOWN_CODE' { Enforcement-Value $unknown }
+  Assert-Synthetic ($unknownFact.status -ceq 'INCONCLUSIVE' -and $unknownFact.value -ceq 'UNKNOWN')
+  Assert-Synthetic ($null -eq (Expected-Match $unknownFact $true))
+}
+$object = Read-Fact 'TEST_UNSAFE_OBJECT' { [pscustomobject]@{ synthetic='not-an-enum' } }
+Assert-Synthetic ($object.status -ceq 'INCONCLUSIVE' -and $null -eq $object.value)
+Write-Output 'PURE_NORMALIZATION_OK'
+'''
+        for forbidden in ['Get-NetFirewall', 'Query-One', 'Property-Value', 'Get-Content',
+                          'Set-Content', 'Set-Acl', 'Start-Process', 'Invoke-Expression',
+                          'pi-windows-sandbox', 'python_isolation_acceptance', 'C:\\PiSandboxLab']:
+            self.assertNotIn(forbidden, script)
+        powershell = shutil.which('pwsh')
+        if not powershell:
+            if os.name == 'nt':
+                self.fail('Host PowerShell missing; pure normalization must pass before security stages')
+            self.skipTest('pwsh unavailable; source checks pass but PowerShell behavior is unexecuted')
+        result = subprocess.run([powershell, '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
+                                capture_output=True, text=True, timeout=15, check=False)
+        self.assertEqual(result.returncode, 0, 'Pure PowerShell normalization failed')
+        self.assertIn('PURE_NORMALIZATION_OK', result.stdout)
+
     def test_firewall_metadata_has_one_exact_artifact_destination(self):
         observation = self.firewall_observation()
         artifact = 'python-isolation-evidence/python-isolation-firewall-active-store.json'
@@ -407,6 +515,40 @@ class PythonIsolationWorkflowContracts(unittest.TestCase):
         self.assertIn('All fixed policy roots must already exist.', source)
         self.assertNotIn('input.txt', self.stage_actions)
         self.assertNotIn('secret.txt', self.stage_actions)
+
+    def test_session_fixture_starts_protected_without_a_staging_sid_grant(self):
+        source = self.stager
+        self.assertIn("'fixtures\\outside-world', 'fixtures\\outside-logon'", source)
+        self.assertEqual(source.count("'fixtures\\outside-logon'"), 2)
+        self.assertIn('outsideLogonInitiallyProtected=$true', source)
+        self.assertIn("outsideLogonGrantOwner='native-verified-helper-logon-only'", source)
+        self.assertIn("Invoke-Icacls -Arguments @($root, '/setowner', '*S-1-5-32-544', '/T', '/Q')", source)
+        grants = [line for line in self.stage_actions.splitlines() if "'/grant" in line]
+        self.assertEqual(len(grants), 1)
+        self.assertIn('$root\\fixtures\\outside-world', grants[0])
+        self.assertNotIn('outside-logon', grants[0])
+        for forbidden in ['S-1-5-5-', 'Get-LocalUser', 'Get-Process', 'GetTokenInformation',
+                          'LookupAccount', 'LogonUser', 'whoami', 'New-LocalUser']:
+            self.assertNotIn(forbidden, self.stage_actions)
+        self.assertIn('Staging never selects or grants that SID.', source)
+
+    def test_session_feature_build_preserves_prior_checks_and_boundary_disclosure(self):
+        source = self.workflow
+        builds = [line.strip() for line in source.splitlines() if 'cargo build ' in line]
+        self.assertEqual(len(builds), 1)
+        self.assertIn('--features lab-python-logon-sid-comparison ', builds[0])
+        for feature in ['lab-python-isolation-acceptance', 'lab-python-policy-repair-comparison',
+                        'lab-python-logon-sid-comparison']:
+            self.assertIn('cargo check --locked --no-default-features --features ' + feature + ' ', source)
+        self.assertIn('session-granted outside-logon boundary exception', source)
+        self.assertIn('sessionOutsideBoundaryException=$true; fullIsolationEligible=$false', source)
+        self.assertIn('totalOfflineWfpFilters=14', source)
+        self.assertIn('after ten durable', source)
+        self.assertIn('verifies/revokes it after session tree cleanup', source)
+        self.assertIn('three appended cap-plus-Logon-SID session cases', source)
+        self.assertIn('not a workspace-only or full-isolation claim', source)
+        cargo = (NATIVE / 'Cargo.toml').read_text(encoding='utf-8')
+        self.assertIn('lab-python-logon-sid-comparison = ["lab-python-policy-repair-comparison"]', cargo)
 
     def test_disable_does_not_require_python_or_fixture_integrity(self):
         source = self.stager

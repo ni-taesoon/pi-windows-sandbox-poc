@@ -6,12 +6,12 @@ fn frame(case: Case) -> Frame {
         outside_read:Some(Probe::Success),outside_write:Some(Probe::PermissionDenied { winerror:Some(5), errno:None, error_type:None }),
         input_ok:Some(true),output_ok:Some(true),denied_read:Some(Probe::PermissionDenied { winerror:Some(5), errno:None, error_type:None }),
         denied_write:Some(Probe::PermissionDenied { winerror:Some(5), errno:None, error_type:None }),tcp4:Some(Probe::PermissionDenied { winerror:Some(10013), errno:None, error_type:None }),
-        tcp6:Some(Probe::PermissionDenied { winerror:Some(10013), errno:None, error_type:None }) };
+        tcp6:Some(Probe::PermissionDenied { winerror:Some(10013), errno:None, error_type:None }),session_grant_write:None };
     let mut f = Frame { case, account_sid:"S-1-5-21-1-2-3-1001".into(),capability_sid:"S-1-5-21-4-5-6-7".into(),
         private_desktop:"Winsta0\\PiSandboxDesktop-0123456789abcdef0123456789abcdef".into(),
         run:Some(RunResult {kind:"result".into(),exit_code:0,stdout_base64:String::new(),stderr_base64:String::new(),
             stop_reason:StopReason::Exited,timed_out:false,truncated:false,terminated:true,cleanup_verified:true}),
-        launch_error:None,native:NativeEvidence::default(),candidate_token:None };
+        launch_error:None,native:NativeEvidence::default(),candidate_token:None,session_token:None };
     let mut restrictors = vec![f.capability_sid.clone()];
     if case.pinned() { restrictors.extend([f.account_sid.clone(),"S-1-1-0".into(),"S-1-5-5-1-2".into()]); }
     restrictors.sort();
@@ -147,8 +147,8 @@ fn set_script(f: &mut Frame,s: &ScriptEvidence) { f.run.as_mut().unwrap().stdout
     }
     assert!(telemetry.contains("AceCount > 64"));assert!(telemetry.contains("FILE_FLAG_OPEN_REPARSE_POINT"));
     assert!(telemetry.contains("trusteeRole"));assert!(telemetry.contains("fileDeleteChild"));
-    assert!(driver.contains("fixed_target_dacls(owner,identity.sid(),None)"));
-    assert!(driver.contains("fixed_target_dacls(owner,&frame.account_sid,Some(&frame.capability_sid))"));
+    assert!(driver.contains("fixed_target_dacls(owner,identity.sid(),None,None)"));
+    assert!(driver.contains("fixed_target_dacls(owner,&frame.account_sid,Some(&frame.capability_sid),"));
 }
 #[test] fn job_diagnostics_precede_bounded_cardinality_rejection() {
     let observer=include_str!("../src/python_isolation/observer.rs");
@@ -233,9 +233,9 @@ fn candidate_configuration(capability: &str) -> CandidateTokenConfiguration {
     let names=Case::ALL.map(Case::name);
     assert_eq!(&names[..7],&["ordinary-outside","strict-boundary","strict-child-normal-exit","strict-child-timeout",
         "pinned-boundary","pinned-child-normal-exit","pinned-child-timeout"]);
-    assert_eq!(&names[7..],&["candidate-boundary","candidate-child-normal-exit","candidate-child-timeout"]);
-    assert_eq!(compiled_feature(),"lab-python-policy-repair-comparison");
-    for case in &Case::ALL[7..] {
+    assert_eq!(&names[7..10],&["candidate-boundary","candidate-child-normal-exit","candidate-child-timeout"]);
+    assert!(compiled_feature()=="lab-python-policy-repair-comparison" || compiled_feature()=="lab-python-logon-sid-comparison");
+    for case in &Case::ALL[7..10] {
         assert!(case.candidate());assert!(!case.pinned());assert_eq!(case.label(),"candidate");
         assert!(FixedRequest::new(request(*case,123,"0".repeat(64))).is_ok());
     }
@@ -278,4 +278,82 @@ fn candidate_configuration(capability: &str) -> CandidateTokenConfiguration {
     let manifest=include_str!("../Cargo.toml");
     assert!(manifest.contains("lab-python-policy-repair-comparison = [\"lab-python-isolation-acceptance\"]"));
     assert!(manifest.contains("default = []"));
+}
+fn session_configuration(capability:&str)->SessionTokenConfiguration{
+    SessionTokenConfiguration {profile:"CAP_PLUS_ACTUAL_LOGON_UPSTREAM_DEFAULT_DACL_V1".into(),base_restricting_sid_count:0,
+        actual_logon_sid:"S-1-5-5-1-2".into(),restricting_sids:vec![capability.into(),"S-1-5-5-1-2".into()],
+        default_dacl_aces:candidate_configuration(capability).default_dacl_aces}
+}
+#[test] fn session_configuration_is_exactly_capability_plus_actual_logon(){
+    let cap="S-1-5-21-1-2-3-4";let mut config=session_configuration(cap);assert!(config.matches_capability(cap));
+    config.restricting_sids.push("S-1-1-0".into());assert!(!config.matches_capability(cap));
+    config=session_configuration(cap);config.restricting_sids.push("S-1-5-21-8-9-10-1000".into());assert!(!config.matches_capability(cap));
+    config=session_configuration(cap);config.base_restricting_sid_count=1;assert!(!config.matches_capability(cap));
+    config=session_configuration(cap);config.actual_logon_sid="S-1-1-0".into();assert!(!config.matches_capability(cap));
+}
+#[cfg(feature="lab-python-logon-sid-comparison")]
+#[test] fn session_feature_appends_only_three_cases_after_ten_controls(){
+    assert_eq!(Case::ALL.len(),13);
+    assert_eq!(Case::ALL[9],Case::CandidateChildTimeout);
+    assert_eq!(Case::ALL[10..].iter().map(|case|case.name()).collect::<Vec<_>>(),
+        vec!["session-boundary","session-child-normal-exit","session-child-timeout"]);
+    assert_eq!(compiled_feature(),"lab-python-logon-sid-comparison");
+    for case in &Case::ALL[10..]{assert!(case.session());assert!(!case.candidate());assert!(!case.pinned());
+        assert!(FixedRequest::new(request(*case,123,"0".repeat(64))).is_ok());}
+    assert_eq!(fixed_policy().writable_roots,vec![WORK]);
+    assert!(!fixed_policy().writable_roots.contains(&OUTSIDE_LOGON.into()));
+}
+#[cfg(feature="lab-python-logon-sid-comparison")]
+#[test] fn session_native_readback_and_authorized_exception_are_distinct_from_escape(){
+    let mut f=frame(Case::SessionBoundary);assert!(!native_valid(&f));
+    f.session_token=Some(session_configuration(&f.capability_sid));
+    f.native.root.as_mut().unwrap().restricting_sids=f.session_token.as_ref().unwrap().restricting_sids.clone();
+    f.native.root.as_mut().unwrap().restricting_sids.sort();assert!(native_valid(&f));
+    let mut script=parse_script(&frame(Case::PinnedBoundary)).unwrap();script.mode=Case::SessionBoundary;
+    script.session_grant_write=Some(Probe::Success);set_script(&mut f,&script);
+    assert_eq!(session_grant_verdict(&f,true,true),Verdict::AuthorizedSessionGrantObserved);
+    assert_eq!(session_grant_verdict(&f,false,true),Verdict::Inconclusive);
+    assert_eq!(session_grant_verdict(&f,true,false),Verdict::Inconclusive);
+    f.native.root.as_mut().unwrap().restricting_sids.push("S-1-1-0".into());assert!(!native_valid(&f));
+}
+#[cfg(feature="lab-python-logon-sid-comparison")]
+#[test] fn session_profile_requires_exception_and_restoration_without_erasing_controls(){
+    let mut a=assess(&frame(Case::StrictBoundary),true,true,true);
+    a.session_grant=Verdict::AuthorizedSessionGrantObserved;
+    let mut values=vec![(Case::SessionBoundary,a.clone())];
+    a.descendant_cleanup=Verdict::ObservedPass;
+    values.push((Case::SessionChildNormalExit,a.clone()));values.push((Case::SessionChildTimeout,a.clone()));
+    assert!(session_profile_acceptance(&values,true,true,true));
+    assert!(!session_profile_acceptance(&values,true,true,false));
+    assert!(!any_policy_boundary_failure(&values));assert!(!a.full_pass);
+    let mut pinned=a;pinned.outside_write=Verdict::PolicyBoundaryFail;values.insert(0,(Case::PinnedBoundary,pinned));
+    assert!(session_profile_acceptance(&values,true,true,true));assert!(any_policy_boundary_failure(&values));
+}
+#[test] fn session_constructor_uses_original_unrestricted_base_and_no_world_or_user(){
+    let constructor=include_str!("../src/python_isolation/token_candidate.rs").split("pub(crate) unsafe fn create_lab_logon_session_token_from").nth(1).unwrap();
+    assert!(constructor.find("base_sids.is_empty()").unwrap()<constructor.find("create_token_with_caps_impl(").unwrap());
+    assert!(constructor.contains("create_token_with_caps_impl(base,&[capability],&[logon_ptr],false)"));
+    assert!(constructor.contains("get_logon_sid_bytes(base)"));
+    assert!(constructor.contains("set_default_dacl(derived,logon_ptr,&[])"));
+    assert!(!constructor.contains("get_user_sid_bytes"));assert!(!constructor.contains("world_sid"));
+    let broker=include_str!("../src/python_isolation/broker.rs");
+    assert!(broker.contains("recorded_cases==10"));assert!(broker.contains("acknowledged_controls==10 && case==Case::SessionBoundary"));
+    assert!(broker.find("record(&frame)?").unwrap()<broker.find("prepare_session_grant(&lab::VerifiedSessionIdentity").unwrap());
+    assert!(broker.find("prepare_session_grant(&lab::VerifiedSessionIdentity").unwrap()<broker.find("send(&pipe, &Recorded").unwrap());
+    assert!(broker.contains("config.actual_logon_sid==actual_logon_sid"));
+}
+#[test] fn session_grant_is_one_fixed_pinned_leaf_and_restoration_has_no_drop_side_effect(){
+    let grant=include_str!("../src/python_isolation/session_grant.rs");
+    for needed in ["Path::new(OUTSIDE_LOGON)","trusted-leaf-owner","fresh-empty-logon-leaf-required","create_directory_guard",
+        "self.original.aces","exact-logon-grant-readback","restore-original-leaf-readback","attempted=true",
+        "grants.len()!=1","grants[0].mask!=MODIFY","originalLeafDaclRestored","trusteeRole"]{assert!(grant.contains(needed),"{needed}");}
+    assert!(!grant.contains("impl Drop for SessionGrant"));assert!(!grant.contains("SetNamedSecurityInfo"));
+    assert!(!grant.contains("remove_file"));assert!(!grant.contains("ConvertSidToStringSid"));
+    assert_eq!(grant.matches("SetSecurityInfo(self.leaf.as_raw_handle()").count(),2);
+    let driver=include_str!("../examples/python_isolation_acceptance/windows.rs");
+    assert!(driver.contains("if run.is_ok(){"));assert!(driver.contains("RETAINED_CLEANUP_UNCERTAIN"));
+    assert!(driver.contains("grant.restore_after_verified_cleanup()"));
+    assert!(driver.contains("\"strictWorkspaceOnlyAcceptance\":false"));
+    assert!(driver.contains("AUTHORIZED_SESSION_GRANT_OBSERVED"));
+    assert!(driver.contains("child artifact ACL/ownership is not a production revocation guarantee"));
 }

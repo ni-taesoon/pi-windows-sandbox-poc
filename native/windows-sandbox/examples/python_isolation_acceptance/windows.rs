@@ -172,14 +172,18 @@ fn dacl_target(p: &Path,directory: bool,roles: &[(&str,token::LocalSid)]) -> Dac
         LocalFree(descriptor as HLOCAL);result
     }
 }
-fn fixed_target_dacls(owner: &str,account: &str,cap: Option<&str>) -> serde_json::Value {
+fn fixed_target_dacls(owner: &str,account: &str,cap: Option<&str>,logon:Option<&str>) -> serde_json::Value {
     let mut definitions=vec![("OWNER",owner),("SANDBOX_ACCOUNT",account),("EVERYONE","S-1-1-0"),
         ("BUILTIN_USERS","S-1-5-32-545"),("ADMINISTRATORS","S-1-5-32-544"),("SYSTEM","S-1-5-18")];
     if let Some(cap)=cap { definitions.push(("CAPABILITY",cap)); }
+    if let Some(logon)=logon { definitions.push(("LOGON",logon)); }
     let roles=definitions.into_iter().map(|(label,sid)|token::LocalSid::from_string(sid).map(|sid|(label,sid))).collect::<Result<Vec<_>>>();
-    let targets=[("WORK_ROOT","work",true),("DENIED_WRITE_DIR",r"work\denied-write",true),
+    #[allow(unused_mut)]
+    let mut targets=vec![("WORK_ROOT","work",true),("DENIED_WRITE_DIR",r"work\denied-write",true),
         ("DENIED_READ_DIR",r"work\denied-read",true),("DENIED_READ_FILE",r"work\denied-read\secret.txt",false),
         ("OUTSIDE_WORLD_DIR",r"fixtures\outside-world",true)];
+    #[cfg(feature="lab-python-logon-sid-comparison")]
+    targets.push(("OUTSIDE_LOGON_DIR",r"fixtures\outside-logon",true));
     serde_json::Value::Array(targets.into_iter().map(|(target,name,directory)| {
         let result=match &roles { Ok(roles)=>dacl_target(&path(name),directory,roles),Err(_)=>Err(dacl_bad("normalize-known-trustee-roles")) };
         match result {
@@ -227,6 +231,8 @@ fn inputs() -> Result<(Vec<File>, BTreeMap<String,String>)> {
     for p in [PathBuf::from(r"C:\"), path(""), path("trusted"), path("work"), path("fixtures"),
         path(r"work\denied-read"), path(r"work\denied-write")] { pin_directory(&p, false, &mut pins)?; }
     pin_directory(&path(r"fixtures\outside-world"), true, &mut pins)?;
+    #[cfg(feature="lab-python-logon-sid-comparison")]
+    pin_directory(&path(r"fixtures\outside-logon"),false,&mut pins)?;
     let mut digest = BTreeMap::new();
     for name in ["python_isolation_acceptance.exe", "pi-windows-sandbox.exe", "python-isolation-fixture.py",
         "python-isolation-stage.json", "python-isolation-runtime-manifest.json"] {
@@ -346,6 +352,8 @@ fn run_suite(owner: &str, digest: &BTreeMap<String,String>, pins: &mut Vec<File>
     network::verify_offline_protection(identity.sid())?; drop(identity);
     let listeners = Loopback::new(); let mut before = listeners.sample();
     let mut frames = Vec::new(); let mut assessments: Vec<(Case,Assessment)> = Vec::new(); let mut ordinary_ok = false;
+    #[cfg(feature="lab-python-logon-sid-comparison")]
+    let session_grant=std::cell::RefCell::new(None::<lab::session_grant::SessionGrant>);
     let run = unsafe { broker::run_fixed_python_acceptance(FixedRequest::new(lab::request(Case::StrictBoundary,
         GetCurrentProcessId(),policy_hash.clone()))?, &mut |frame: &Frame| {
         let after = listeners.sample();
@@ -355,6 +363,13 @@ fn run_suite(owner: &str, digest: &BTreeMap<String,String>, pins: &mut Vec<File>
                 && file_bytes_match(&path(r"fixtures\outside-world\ordinary-write.txt"),b"SYNTHETIC_OUTSIDE_WRITE\n");
         }
         let mut assessment = lab::assess(frame,positive_output(frame.case),ordinary_ok,healthy(&before) && healthy(&after));
+        let session_artifact_matches=frame.case.session() && frame.case.boundary()
+            && file_bytes_match(&path(r"fixtures\outside-logon\session-write.txt"),lab::SESSION_OUTPUT);
+        #[cfg(feature="lab-python-logon-sid-comparison")]
+        let session_grant_verified=session_grant.borrow().as_ref().is_some_and(|grant|grant.is_applied());
+        #[cfg(not(feature="lab-python-logon-sid-comparison"))]
+        let session_grant_verified=false;
+        assessment.session_grant=lab::session_grant_verdict(frame,session_artifact_matches,session_grant_verified);
         let outside_artifact = if frame.case.boundary() {
             artifact_presence(&path(r"fixtures\outside-world").join(format!("{}-write.txt",frame.case.label())))
         } else { Ok(false) };
@@ -374,14 +389,52 @@ fn run_suite(owner: &str, digest: &BTreeMap<String,String>, pins: &mut Vec<File>
             "expectedWfpFilterCount":network::expected_wfp_filter_count(),
             "frame":frame,"script":lab::parse_script(frame).ok(),"scriptError":lab::parse_script(frame).err().map(|e|format!("{e:#}")),
             "assessment":assessment,"loopbackBefore":before,"loopbackAfter":after,
-            "fixedTargetDacls":fixed_target_dacls(owner,&frame.account_sid,Some(&frame.capability_sid)),
+            "fixedTargetDacls":fixed_target_dacls(owner,&frame.account_sid,Some(&frame.capability_sid),
+                frame.session_token.as_ref().map(|config|config.actual_logon_sid.as_str())),
+            "sessionGrantArtifactBytesMatch":session_artifact_matches,"sessionGrantVerified":session_grant_verified,
+            "sessionGrantBoundaryException":frame.case.session(),"strictWorkspaceOnlyAcceptance":false,
             "outputBytesMatch":positive_output(frame.case),"ordinaryOutsideControlHealthy":ordinary_ok,
             "outsideWriteArtifact":{"present":outside_artifact.as_ref().ok(),"error":outside_artifact.err().map(|e|format!("{e:#}"))},
             "deniedWriteArtifact":{"present":denied_artifact.as_ref().ok(),"error":denied_artifact.err().map(|e|format!("{e:#}"))}});
         fresh_write(&path("trusted").join(format!("python-isolation-{}.json",frame.case.name())),&serde_json::to_vec_pretty(&record)?)?;
         frames.push(record); assessments.push((frame.case,assessment)); before = after;
         Ok(())
+    },
+    #[cfg(feature="lab-python-logon-sid-comparison")]
+    &mut |identity:&lab::VerifiedSessionIdentity| {
+        ensure!(session_grant.borrow().is_none(),"single session grant callback required");
+        let prepared=lab::session_grant::SessionGrant::prepare(identity);
+        match prepared {
+            Ok(grant)=>*session_grant.borrow_mut()=Some(grant),
+            Err(error)=>{
+                fresh_write(&path(r"trusted\python-isolation-session-grant-created.json"),&serde_json::to_vec_pretty(
+                    &serde_json::json!({"schemaVersion":1,"target":"OUTSIDE_LOGON_DIR","status":"PREPARE_FAILED","error":error}))?)?;
+                return Err(error.into());
+            }
+        }
+        let mut stored=session_grant.borrow_mut();let grant=stored.as_mut().context("session grant missing")?;
+        let applied=grant.apply();
+        fresh_write(&path(r"trusted\python-isolation-session-grant-created.json"),&serde_json::to_vec_pretty(
+            &grant.receipt(if applied.is_ok(){"GRANT_VERIFIED"}else{"GRANT_INCONCLUSIVE"},applied.as_ref().err()))?)?;
+        applied.map_err(anyhow::Error::from)
     }) };
+    #[cfg(feature="lab-python-logon-sid-comparison")]
+    let session_grant_cleanup={
+        let mut stored=session_grant.borrow_mut();
+        let receipt=if let Some(grant)=stored.as_mut(){
+            if run.is_ok(){
+                // Broker success includes every inner tree, helper exit, empty
+                // outer Job and ordinary admission cleanup. No restoration on Err.
+                let restored=unsafe{grant.restore_after_verified_cleanup()};
+                grant.receipt(if restored.is_ok(){"ORIGINAL_LEAF_DACL_RESTORED"}else{"RESTORE_INCONCLUSIVE"},restored.as_ref().err())
+            }else{grant.receipt("RETAINED_CLEANUP_UNCERTAIN",None)}
+        }else{serde_json::json!({"schemaVersion":1,"target":"OUTSIDE_LOGON_DIR","status":"NOT_CREATED","originalLeafDaclRestored":false})};
+        fresh_write(&path(r"trusted\python-isolation-session-grant-cleanup.json"),&serde_json::to_vec_pretty(&receipt)?)?;
+        receipt
+    };
+    #[cfg(not(feature="lab-python-logon-sid-comparison"))]
+    let session_grant_cleanup=serde_json::json!({"status":"NOT_ENABLED","originalLeafDaclRestored":false});
+    let session_profile=lab::session_profile_acceptance(&assessments,ordinary_ok,run.is_ok(),session_grant_cleanup["originalLeafDaclRestored"]==true);
     let boundary_fail = lab::any_policy_boundary_failure(&assessments);
     let core = !boundary_fail && ordinary_ok && run.is_ok() && assessments.iter().filter(|(c,_)| c.pinned()).count() == 3
         && assessments.iter().filter(|(c,_)| c.pinned()).all(|(c,a)| a.python_success && a.identity == Verdict::ObservedPass
@@ -400,11 +453,17 @@ fn run_suite(owner: &str, digest: &BTreeMap<String,String>, pins: &mut Vec<File>
         "candidatePythonSuccess":candidate.python_success,"candidateIdentityAcceptance":candidate.identity_acceptance,
         "candidateFilesystemAcceptance":candidate.filesystem_acceptance,"candidateLoopbackAcceptance":candidate.loopback_acceptance,
         "candidateCleanupAcceptance":candidate.cleanup_acceptance,"candidateBoundedCoreAcceptance":candidate_core,
+        "sessionProfileAcceptance":session_profile,"strictWorkspaceOnlyAcceptance":false,
+        "sessionGrantCleanup":session_grant_cleanup,
+        "sessionProfileDefinition":"limited current-logon profile: capability plus actual helper Logon SID; declared outside-logon Modify exception; not workspace-only isolation",
+        "sessionExceptionResult":"successful outside-logon write is AUTHORIZED_SESSION_GRANT_OBSERVED, never a strict workspace pass or an escape",
+        "sessionArtifactCleanupLimitation":"only original leaf DACL is restored; child artifact ACL/ownership is not a production revocation guarantee; VM disposal remains required",
         "candidateAcceptanceDefinition":"candidate-only results never override a failed control or the overall comparison verdict; desktop unavailable and parent-death remain outside bounded core",
         "candidateTokenReadbackScope":"helper candidate token queried before CreateProcessAsUserW; Python root/child restricting SIDs are independently queried by the native observer",
-        "composedRepairScope":"when enabled, the two dedicated-account WFP connect filters apply to every control and candidate; only the candidate changes strict default-object DACL, keeping capability-only restrictors",
-        "status":if boundary_fail {"POLICY_BOUNDARY_FAIL"} else if core && (!cfg!(feature="lab-python-policy-repair-comparison") || candidate_core) {"BOUNDED_OBSERVATIONS_RECORDED"} else {"INCONCLUSIVE"},
-        "boundedCoreAcceptance":core && (!cfg!(feature="lab-python-policy-repair-comparison") || candidate_core),
+        "composedRepairScope":"the two dedicated-account WFP connect filters remain unchanged for all cases; candidate is capability-only with upstream default-object DACL; the separately enabled session profile adds only the actual helper Logon SID and its declared fixed-leaf grant",
+        "status":if boundary_fail {"POLICY_BOUNDARY_FAIL"} else if core && (!cfg!(feature="lab-python-policy-repair-comparison") || candidate_core) && (!cfg!(feature="lab-python-logon-sid-comparison") || session_profile) {"BOUNDED_OBSERVATIONS_RECORDED"} else {"INCONCLUSIVE"},
+        "boundedCoreAcceptance":core && (!cfg!(feature="lab-python-policy-repair-comparison") || candidate_core)
+            && (!cfg!(feature="lab-python-logon-sid-comparison") || session_profile),
         "boundedCoreAcceptanceDefinition":["Python root and fixed child token/image/exact-Job identity plus retained-handle cleanup",
             "at most one same-account exact System32 conhost in that Job; its restricting SIDs are reported separately",
             "positive Python files, outside-write denial, explicit denies and live-control loopback denials",
@@ -437,7 +496,7 @@ fn setup_lab(owner: &str) -> Result<()> {
             "ownerSid":owner,"accountSid":identity.sid(),"inputs":digest,
             "labFeature":lab::compiled_feature(),"wfpPolicy":network::wfp_policy_provenance(),
             "expectedWfpFilterCount":network::expected_wfp_filter_count(),
-            "fixedTargetDacls":fixed_target_dacls(owner,identity.sid(),None),
+            "fixedTargetDacls":fixed_target_dacls(owner,identity.sid(),None,None),
             "policyHash":hash(&serde_json::to_vec(&lab::fixed_policy())?)?,"nativeValidated":false}))?)
     })();
     if prepared.is_err() { setup::disable_offline_account(&path("store"),owner).context("setup failed and disable recovery failed")?; }
