@@ -3,6 +3,8 @@ import importlib.util
 import hashlib
 import json
 import os
+import sys
+import sysconfig
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -72,8 +74,20 @@ class OnlineFixtureTests(unittest.TestCase):
     def test_observed_pip_known_folder_resolver_uses_only_work_overrides(self):
         # Read the existing runtime module, not a fetched or newly installed wheel.
         # Exact official pip 26.2.1 bytes match the failed VM inventory.
-        module = importlib.import_module('pip._vendor.platformdirs.windows')
-        source = Path(module.__file__).read_bytes()
+        # CI deliberately uses -I -S -B. Bootstrap only this interpreter's
+        # existing purelib, then restore isolation even if the import fails.
+        purelib = Path(sysconfig.get_path('purelib')).resolve(strict=True)
+        self.assertEqual(purelib, (Path(sys.executable).parent/'Lib'/'site-packages').resolve(strict=True))
+        original_path = tuple(sys.path)
+        try:
+            sys.path.insert(0,str(purelib))
+            module = importlib.import_module('pip._vendor.platformdirs.windows')
+        finally:
+            sys.path[:] = original_path
+        self.assertEqual(tuple(sys.path),original_path)
+        module_path = Path(module.__file__).resolve(strict=True)
+        self.assertEqual(module_path,(purelib/'pip'/'_vendor'/'platformdirs'/'windows.py').resolve(strict=True))
+        source = module_path.read_bytes()
         self.assertEqual(hashlib.sha256(source).hexdigest(),
                          '60e75218d85da719bfc9d66aeee1bbe22f665f6fd659b70c480e1fa1b5f02f43')
         with patch.dict(os.environ, {}, clear=True), \
