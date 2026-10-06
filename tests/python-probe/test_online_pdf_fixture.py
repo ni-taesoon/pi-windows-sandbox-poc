@@ -56,7 +56,9 @@ class OnlineFixtureTests(unittest.TestCase):
         with patch.dict(os.environ, {'HTTPS_PROXY':'bad', 'PIP_INDEX_URL':'bad', 'SSL_CERT_FILE':'bad'}, clear=True), \
                 patch.object(fixture.os, 'devnull', 'nul'):
             fixture.sanitize_environment()
-            self.assertEqual(set(os.environ), {'SystemRoot','WINDIR','TEMP','TMP','PIP_CONFIG_FILE'})
+            # Windows os.environ normalizes keys to uppercase; preserve the exact allowlist.
+            self.assertEqual({key.upper() for key in os.environ}, {'SYSTEMROOT','WINDIR','TEMP','TMP','PIP_CONFIG_FILE'})
+            self.assertEqual(len(os.environ), 5)
             self.assertEqual(os.environ['PIP_CONFIG_FILE'], 'nul')
             self.assertEqual(os.environ['TEMP'], str(fixture.WORK))
 
