@@ -63,6 +63,8 @@ pub unsafe fn run_fixed_python_acceptance(
     pipe.connect(helper.pid, startup)?;
     send(&pipe, &payload, startup)?;
     let mut last = None;
+    #[cfg(feature="lab-python-online-pdf")]
+    let mut online_install_passed=None;
     #[cfg(feature="lab-python-logon-sid-comparison")]
     let mut recorded_cases=0usize;
     for case in Case::ALL {
@@ -83,10 +85,22 @@ pub unsafe fn run_fixed_python_acceptance(
             ensure!(config.actual_logon_sid==actual_logon_sid && config.matches(&helper.account_sid,&payload.capability_sid),
                 "original Codex token does not match authenticated helper logon");
         }
-        // Persist failed loader exits too; never replace strict evidence by pinned success.
+        #[cfg(feature="lab-python-online-pdf")]
+        let skipped_dependency=if case==Case::OnlinePdf {
+            let prerequisite=online_install_passed.context("PDF requires a preceding cleaned install frame")?;
+            ensure!(prerequisite != frame.is_pdf_dependency_skipped(),
+                "PDF launch/skip contradicts independently verified install prerequisite");
+            !prerequisite
+        }else{false};
+        #[cfg(not(feature="lab-python-online-pdf"))]
+        let skipped_dependency=false;
+        // Persist failed loader exits and the exact dependency skip before ACK.
         record(&frame)?;
-        ensure!(frame.cleanup_verified(), "Python tree cleanup unverified; later cases NOT_ATTEMPTED");
-        last = frame.run;
+        ensure!(skipped_dependency || frame.cleanup_verified(), "Python tree cleanup unverified; later cases NOT_ATTEMPTED");
+        #[cfg(feature="lab-python-online-pdf")]
+        if case==Case::OnlineInstall {online_install_passed=Some(lab::online_install_prerequisite_met(&frame));}
+        // A skipped case has no process and cannot replace the last real cleanup result.
+        if let Some(run)=frame.run {last=Some(run);}
         #[cfg(feature="lab-python-logon-sid-comparison")]
         {
             recorded_cases+=1;
@@ -143,7 +157,17 @@ pub fn fixed_python_isolation_helper_main(name: &str, expected_broker: u32) -> R
         let mut acknowledged_controls=0usize;
         #[cfg(feature="lab-python-logon-sid-comparison")]
         let mut session:Option<(Handle,lab::SessionTokenConfiguration)>=None;
+        #[cfg(feature="lab-python-online-pdf")]
+        let mut online_install_passed=None;
         for case in Case::ALL {
+            #[cfg(feature="lab-python-online-pdf")]
+            if case==Case::OnlinePdf && !online_install_passed.context("PDF requires an acknowledged install frame")? {
+                let frame=lab::skipped_online_pdf(&account_sid,&payload.capability_sid,&payload.private_desktop);
+                send(&pipe,&frame,Instant::now()+Duration::from_secs(10))?;
+                let ack:Recorded=receive(&pipe,Instant::now()+Duration::from_secs(10))?;
+                ensure!(ack.case==case,"skipped PDF evidence acknowledgement mismatch");
+                continue;
+            }
             // This branch is reached only after the existing seven control frames
             // were persisted by the owner and their ordered ACKs received below.
             #[cfg(feature="lab-python-policy-repair-comparison")]
@@ -223,6 +247,8 @@ pub fn fixed_python_isolation_helper_main(name: &str, expected_broker: u32) -> R
             };
             send(&pipe, &frame, Instant::now() + Duration::from_secs(10))?;
             ensure!(frame.cleanup_verified(), "Python cleanup unverified; suite stopped");
+            #[cfg(feature="lab-python-online-pdf")]
+            if case==Case::OnlineInstall {online_install_passed=Some(lab::online_install_prerequisite_met(&frame));}
             let ack: Recorded = receive(&pipe, Instant::now() + Duration::from_secs(10))?;
             ensure!(ack.case == case, "Python evidence acknowledgement mismatch");
             #[cfg(feature="lab-python-policy-repair-comparison")]

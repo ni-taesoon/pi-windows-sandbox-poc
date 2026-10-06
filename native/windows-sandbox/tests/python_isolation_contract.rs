@@ -602,3 +602,53 @@ fn online_frame(case:Case)->Frame {
     assert!(source.contains("pagesize=A4, pdfVersion=(1, 4), pageCompression=0, invariant=1"));
     assert!(!include_str!("../../../scripts/python-isolation-fixture.py").contains("online-install"));
 }
+
+#[cfg(feature="lab-python-online-pdf")]
+#[test] fn skipped_pdf_is_exact_absent_process_and_never_cleanup_or_success() {
+    let install=online_frame(Case::OnlineInstall);
+    let skipped=skipped_online_pdf(&install.account_sid,&install.capability_sid,&install.private_desktop);
+    assert!(skipped.is_pdf_dependency_skipped());assert!(skipped.run.is_none());assert!(skipped.execution_window.is_none());
+    assert!(skipped.native.root.is_none());assert!(skipped.codex_token.is_none());
+    assert!(!skipped.cleanup_verified());assert!(!native_valid(&skipped));assert!(parse_script(&skipped).is_err());
+    let assessment=assess(&skipped,true,true,true);
+    assert_eq!(assessment.attempt_status,Some("SKIPPED_DEPENDENCY"));
+    assert!(!assessment.python_success);assert_eq!(assessment.identity,Verdict::NotTested);
+    assert_eq!(assessment.desktop,Verdict::NotTested);assert_eq!(assessment.descendant_cleanup,Verdict::NotTested);
+    assert!(!assessment.full_pass);
+    for mutation in 0..7 {
+        let mut bad=skipped.clone();
+        match mutation {
+            0=>bad.case=Case::OnlineInstall,1=>bad.run=install.run.clone(),
+            2=>bad.execution_window=install.execution_window.clone(),3=>bad.native.job_empty=true,
+            4=>bad.native.root=install.native.root.clone(),5=>bad.codex_token=install.codex_token.clone(),
+            _=>bad.launch_error=Some("ordinary launch failure".into()),
+        }
+        assert!(!bad.is_pdf_dependency_skipped(),"accepted modified skip {mutation}");
+    }
+}
+#[cfg(feature="lab-python-online-pdf")]
+#[test] fn install_prerequisite_needs_exit_script_identity_and_cleanup() {
+    let good=online_frame(Case::OnlineInstall);assert!(online_install_prerequisite_met(&good));
+    assert!(!online_install_prerequisite_met(&online_frame(Case::OnlinePdf)));
+    for mutation in 0..7 {
+        let mut bad=good.clone();
+        match mutation {
+            0=>bad.run.as_mut().unwrap().exit_code=1,
+            1=>bad.run.as_mut().unwrap().stdout_base64.clear(),
+            2=>bad.native.root.as_mut().unwrap().exact_job_member=false,
+            3=>bad.native.root.as_mut().unwrap().retained_handle_signaled=false,
+            4=>bad.native.job_empty=false,
+            5=>bad.native.root.as_mut().unwrap().desktop=DesktopEvidence::Observed{name:"unexpected".into()},
+            _=>bad.launch_error=Some("launch error".into()),
+        }
+        assert!(!online_install_prerequisite_met(&bad),"accepted invalid install {mutation}");
+    }
+    let source=include_str!("../src/python_isolation/broker.rs");
+    assert!(source.contains("prerequisite != frame.is_pdf_dependency_skipped()"));
+    assert!(source.contains("if let Some(run)=frame.run {last=Some(run);}"));
+    let skip_branch=source.split("if case==Case::OnlinePdf && !online_install_passed").nth(1).unwrap()
+        .split("// This branch").next().unwrap();
+    assert!(skip_branch.contains("skipped_online_pdf"));assert!(skip_branch.contains("send(&pipe,&frame"));
+    assert!(skip_branch.contains("let ack:Recorded=receive"));assert!(skip_branch.contains("continue;"));
+    assert!(!skip_branch.contains("run_fixed_python"));
+}
