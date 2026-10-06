@@ -145,7 +145,16 @@ def sanitize_environment():
     # ReportLab setting and user-profile selector before entering pip.
     os.environ.clear()
     os.environ.update({"SystemRoot": r"C:\Windows", "WINDIR": r"C:\Windows",
-                       "TEMP": str(WORK), "TMP": str(WORK), "PIP_CONFIG_FILE": os.devnull})
+                       "TEMP": str(WORK), "TMP": str(WORK), "PIP_CONFIG_FILE": os.devnull,
+                       "USERPROFILE": str(WORK), "APPDATA": str(WORK), "LOCALAPPDATA": str(WORK),
+                       "WIN_PD_OVERRIDE_LOCAL_APPDATA": str(WORK),
+                       "WIN_PD_OVERRIDE_APPDATA": str(WORK),
+                       "WIN_PD_OVERRIDE_COMMON_APPDATA": str(WORK)})
+    # pip 26.2.1 computes platformdirs paths during import, even with --no-cache-dir.
+    # Its supported WIN_PD_OVERRIDE_* variables precede the Windows known-folder
+    # API. Keep these process-local paths inside existing WORK; do not load or
+    # create an OS user profile, change permissions, or enable pip caching.
+    # https://github.com/pypa/pip/blob/26.2.1/src/pip/_vendor/platformdirs/windows.py#L381-L390
     # PIP_CONFIG_FILE=os.devnull is pip's documented all-config-file disable.
     # Use the exact lowercase Windows spelling: pip compares it case-sensitively.
     if os.devnull.lower() != "nul":
