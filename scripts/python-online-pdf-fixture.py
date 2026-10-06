@@ -12,6 +12,7 @@ import io
 import json
 import os
 import pathlib
+import re
 import runpy
 import struct
 import sys
@@ -36,6 +37,58 @@ PIP_ARGS = (
     "--timeout", "20", "--target", str(DEPS), "--report", str(REPORT),
     "-r", str(TRUSTED / "python-online-pdf-requirements.txt"),
 )
+
+
+STAGES = frozenset((
+    "ENTRY", "INSTALL_FRESHNESS", "INSTALL_CREATE_TARGET", "INSTALL_CHECK_TARGET_EMPTY",
+    "INSTALL_BOOTSTRAP_PATH", "INSTALL_RUN_PIP", "INSTALL_VERIFY_REPORT",
+    "INSTALL_TARGET_IMPORTS", "INSTALL_DISTRIBUTION_READBACK", "INSTALL_MODULE_IMPORTS",
+    "PDF_BOOTSTRAP_PATH", "PDF_DISTRIBUTION_READBACK", "PDF_MODULE_IMPORTS",
+    "PDF_IMPORT_CANVAS", "PDF_CREATE_DOCUMENT", "PDF_WRITE_DOCUMENT",
+))
+_OPERATION_STAGE = "ENTRY"
+_PIP_CAPTURE = None
+
+
+def mark_stage(value):
+    global _OPERATION_STAGE
+    if value not in STAGES:
+        raise RuntimeError("unknown fixed operation stage")
+    _OPERATION_STAGE = value
+
+
+def failure_evidence(error):
+    """Static operation and numeric errors only: no message, locals or raw path."""
+    def numeric(name):
+        value = getattr(error, name, None)
+        return value if type(value) is int and -(2**31) <= value <= 2**32-1 else None
+
+    fixture_name = str(pathlib.Path(__file__)).replace("\\", "/").lower()
+    runtime_lib = str(ROOT / "runtime" / "Lib").replace("\\", "/").lower() + "/"
+    frames = []
+    trace = error.__traceback__
+    visited = 0
+    while trace is not None and visited < 32:
+        name = trace.tb_frame.f_code.co_filename.replace("\\", "/").lower()
+        frame = {"sourceRole": "OTHER", "line": int(trace.tb_lineno)}
+        if name == fixture_name:
+            frame["sourceRole"] = "FIXED_FIXTURE"
+        elif name.startswith(runtime_lib):
+            relative = name[len(runtime_lib):]
+            module = relative.removeprefix("site-packages/")
+            if (len(module) <= 160 and len(module.split("/")) <= 12
+                    and re.fullmatch(r"(?:[a-z0-9_]+/)*[a-z0-9_]+\.py", module)
+                    and (not relative.startswith("site-packages/") or relative.startswith("site-packages/pip/"))):
+                frame["sourceRole"] = "TRUSTED_PIP" if relative.startswith("site-packages/pip/") else "TRUSTED_STDLIB"
+                frame["module"] = module
+        frames.append(frame)
+        trace = trace.tb_next
+        visited += 1
+    # Keep the last eight visited frames; disclose the bounded traversal limit.
+    return {"stage": _OPERATION_STAGE, "errno": numeric("errno"), "winerror": numeric("winerror"),
+            "sourceTrace": frames[-8:], "traceTruncated": visited > 8 or trace is not None,
+            "capturedPipOutputByteCount": _PIP_CAPTURE.size if _PIP_CAPTURE is not None else 0,
+            "capturedPipOutputTruncated": _PIP_CAPTURE.truncated if _PIP_CAPTURE is not None else False}
 
 
 def canonical_name(value):
@@ -147,19 +200,27 @@ def verify_report():
 
 
 def online_install():
+    global _PIP_CAPTURE
+    _PIP_CAPTURE = None
     started = utc_ms()
+    mark_stage("INSTALL_FRESHNESS")
     # A rerun, prestaged distribution or report cannot produce a success receipt.
     if DEPS.exists() or REPORT.exists() or PDF.exists():
         raise RuntimeError("fresh installation target and artifacts required")
+    mark_stage("INSTALL_CREATE_TARGET")
     DEPS.mkdir()
+    mark_stage("INSTALL_CHECK_TARGET_EMPTY")
     if any(DEPS.iterdir()):
         raise RuntimeError("empty fresh install target required")
+    mark_stage("INSTALL_BOOTSTRAP_PATH")
     initial_path = tuple(sys.path)
     if any("site-packages" in part.lower() for part in initial_path):
         raise RuntimeError("isolated startup contained site-packages")
     sys.path.insert(0, str(RUNTIME_SITE))
     output = BoundedOutput()
+    _PIP_CAPTURE = output
     pip_exit_code = 0
+    mark_stage("INSTALL_RUN_PIP")
     try:
         sys.argv = ["pip", *PIP_ARGS]
         with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
@@ -172,12 +233,16 @@ def online_install():
         sys.path[:] = initial_path
     if pip_exit_code != 0:
         raise FixedPipFailure(pip_exit_code, output)
+    mark_stage("INSTALL_VERIFY_REPORT")
     report_verified = verify_report()
     # Pip/bootstrap site-packages never participate in the evidence imports.
+    mark_stage("INSTALL_TARGET_IMPORTS")
     if any(name in sys.modules for name in ("reportlab", "PIL", "charset_normalizer")):
         raise RuntimeError("package imported before target-only import check")
     sys.path.insert(0, str(DEPS))
+    mark_stage("INSTALL_DISTRIBUTION_READBACK")
     installed = distribution_evidence()
+    mark_stage("INSTALL_MODULE_IMPORTS")
     origins = import_evidence()
     return {"startedUnixMs": started, "finishedUnixMs": utc_ms(), "pipExitCode": pip_exit_code,
             "target": str(DEPS), "reportPath": str(REPORT), "targetWasFresh": True,
@@ -186,15 +251,20 @@ def online_install():
 
 
 def online_pdf():
+    mark_stage("PDF_BOOTSTRAP_PATH")
     if any("site-packages" in part.lower() for part in sys.path):
         raise RuntimeError("PDF process may not import runtime site-packages")
     sys.path.insert(0, str(DEPS))
+    mark_stage("PDF_DISTRIBUTION_READBACK")
     installed = distribution_evidence()
+    mark_stage("PDF_MODULE_IMPORTS")
     origins = import_evidence()
+    mark_stage("PDF_IMPORT_CANVAS")
     from reportlab.pdfgen.canvas import Canvas
     from reportlab.lib.pagesizes import A4
     # A stdlib buffer supplies a fixed synthetic document; no external fonts,
     # images, user documents or package validators are invoked.
+    mark_stage("PDF_CREATE_DOCUMENT")
     buffer = io.BytesIO()
     canvas = Canvas(buffer, pagesize=A4, pdfVersion=(1, 4), pageCompression=0, invariant=1)
     canvas.setTitle("Sandbox PDF test")
@@ -207,6 +277,7 @@ def online_pdf():
     data = buffer.getvalue()
     if not 512 <= len(data) <= 65536:
         raise RuntimeError("fixed PDF byte bounds failed")
+    mark_stage("PDF_WRITE_DOCUMENT")
     with PDF.open("xb") as file:
         file.write(data)
         file.flush()
@@ -244,6 +315,7 @@ def main():
         result["marker"] = "ONLINE_CASE_FAILED"
         # The fixed type is diagnostic only; no local paths or unbounded errors.
         result["errorType"] = type(error).__name__[:64]
+        result["failure"] = failure_evidence(error)
         if isinstance(error, FixedPipFailure):
             result["pipFailure"] = {"exitCode": error.exit_code, "output": error.output,
                                     "outputTruncated": error.truncated}

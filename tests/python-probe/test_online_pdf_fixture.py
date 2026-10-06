@@ -110,6 +110,66 @@ class OnlineFixtureTests(unittest.TestCase):
         output.write('extra')
         self.assertLessEqual(output.size,1024)
 
+    def test_failure_evidence_is_bounded_static_and_omits_private_strings(self):
+        def trace(names):
+            result = None
+            for name in reversed(names):
+                result = SimpleNamespace(tb_frame=SimpleNamespace(f_code=SimpleNamespace(co_filename=name)),
+                                         tb_lineno=123, tb_next=result)
+            return result
+        pip = str(fixture.RUNTIME_SITE/'pip'/'_internal'/'cli'/'main.py')
+        stdlib = str(fixture.ROOT/'runtime'/'Lib'/'pathlib.py')
+        secret = r'C:\Users\private-name\secret.py'
+        names = [str(SOURCE), pip, stdlib, secret, str(fixture.RUNTIME_SITE/'other_package'/'secret.py')]
+        error = SimpleNamespace(errno=13, winerror=5, __traceback__=trace(names),
+                                filename=secret, message='PRIVATE_TOKEN')
+        with patch.object(fixture, '_PIP_CAPTURE', None), patch.object(fixture, '_OPERATION_STAGE', 'INSTALL_RUN_PIP'):
+            evidence = fixture.failure_evidence(error)
+            self.assertEqual(evidence['stage'], 'INSTALL_RUN_PIP')
+            self.assertEqual((evidence['errno'],evidence['winerror']), (13,5))
+            self.assertEqual([f['sourceRole'] for f in evidence['sourceTrace']],
+                             ['FIXED_FIXTURE','TRUSTED_PIP','TRUSTED_STDLIB','OTHER','OTHER'])
+            self.assertEqual(evidence['sourceTrace'][1]['module'], 'pip/_internal/cli/main.py')
+            serialized = json.dumps(evidence)
+            for private in ['private-name','secret.py','PRIVATE_TOKEN','filename','message']:
+                self.assertNotIn(private, serialized)
+            for bad in [str(fixture.RUNTIME_SITE/'pip'/'..'/'secret.py'),
+                        str(fixture.RUNTIME_SITE/'pip_bad'/'secret.py'),
+                        str(fixture.ROOT/'runtime'/'Lib_bad'/'secret.py')]:
+                error.__traceback__ = trace([bad])
+                self.assertEqual(fixture.failure_evidence(error)['sourceTrace'],
+                                 [{'sourceRole':'OTHER','line':123}])
+            error.__traceback__ = trace([pip]*100)
+            error.errno = 'SECRET'; error.winerror = True
+            evidence = fixture.failure_evidence(error)
+            self.assertEqual(len(evidence['sourceTrace']),8)
+            self.assertTrue(evidence['traceTruncated'])
+            self.assertIsNone(evidence['errno']); self.assertIsNone(evidence['winerror'])
+        with self.assertRaises(RuntimeError): fixture.mark_stage('user-selected-stage')
+
+    def test_unexpected_pip_error_preserves_stage_codes_and_capture_count(self):
+        def failing_pip(*args, **kwargs):
+            fixture._PIP_CAPTURE.write('PRIVATE_PIP_TEXT')
+            raise OSError(6, 'PRIVATE_OS_MESSAGE', r'C:\Users\private-name\secret')
+        with patch.object(fixture.pathlib.Path, 'exists', return_value=False), \
+                patch.object(fixture.pathlib.Path, 'mkdir'), \
+                patch.object(fixture.pathlib.Path, 'iterdir', return_value=iter(())), \
+                patch.object(fixture.sys, 'path', ['fixed-stdlib']), \
+                patch.object(fixture.sys, 'argv', ['fixed']), \
+                patch.object(fixture.runpy, 'run_module', side_effect=failing_pip):
+            try:
+                fixture.online_install()
+            except OSError as error:
+                evidence = fixture.failure_evidence(error)
+            else:
+                self.fail('unexpected pip exception must remain a failure')
+            self.assertEqual(fixture.sys.path, ['fixed-stdlib'])
+        self.assertEqual(evidence['stage'],'INSTALL_RUN_PIP')
+        self.assertEqual(evidence['errno'],6)
+        self.assertEqual(evidence['capturedPipOutputByteCount'],len('PRIVATE_PIP_TEXT'))
+        for secret in ['PRIVATE_PIP_TEXT','PRIVATE_OS_MESSAGE','private-name']:
+            self.assertNotIn(secret,json.dumps(evidence))
+
     def test_fixed_pdf_metadata_shape_and_no_external_inputs(self):
         source = SOURCE.read_text()
         for required in ['pagesize=A4', 'pdfVersion=(1, 4)', 'pageCompression=0', 'invariant=1',

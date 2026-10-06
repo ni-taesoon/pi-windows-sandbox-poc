@@ -506,12 +506,24 @@ pub fn desktop_verdict(frame: &Frame) -> Verdict {
 pub enum Verdict { KnownExceptionObserved, ObservedPass, PolicyBoundaryFail, Inconclusive, NotTested, AuthorizedSessionGrantObserved }
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Assessment { pub python_success: bool, pub identity: Verdict, pub desktop: Verdict, pub outside_write: Verdict,
+pub struct Assessment {
+    #[cfg(feature="lab-python-online-pdf")]
+    #[serde(skip_serializing_if="Option::is_none")]
+    pub attempt_status:Option<&'static str>,
+    pub python_success: bool, pub identity: Verdict, pub desktop: Verdict, pub outside_write: Verdict,
     pub outside_read: Option<Probe>, pub broad_read_truth: Verdict, pub explicit_denies: Verdict, pub loopback_only: Verdict,
     pub private_outside_write: Verdict, pub file_operations: Verdict,
     pub descendant_cleanup: Verdict, pub parent_death: Verdict, pub full_pass: bool, pub session_grant: Verdict }
 pub fn assess(frame: &Frame, output_bytes_match: bool, ordinary_outside_write_succeeded: bool,
     live_owner_controls: bool) -> Assessment {
+    #[cfg(feature="lab-python-online-pdf")]
+    if frame.is_pdf_dependency_skipped() {
+        return Assessment {attempt_status:Some("SKIPPED_DEPENDENCY"),python_success:false,
+            identity:Verdict::NotTested,desktop:Verdict::NotTested,outside_write:Verdict::NotTested,
+            outside_read:None,broad_read_truth:Verdict::NotTested,explicit_denies:Verdict::NotTested,
+            loopback_only:Verdict::NotTested,private_outside_write:Verdict::NotTested,file_operations:Verdict::NotTested,
+            descendant_cleanup:Verdict::NotTested,parent_death:Verdict::NotTested,full_pass:false,session_grant:Verdict::NotTested};
+    }
     let script = parse_script(frame).ok();
     let valid_native = native_valid(frame);
     let boundary = script.as_ref().filter(|_| frame.case.boundary());
@@ -522,7 +534,10 @@ pub fn assess(frame: &Frame, output_bytes_match: bool, ordinary_outside_write_su
         _ => Verdict::Inconclusive };
     let file_deny = |p: Option<&Probe>| p.is_some_and(Probe::file_denial);
     let socket_deny = |p: Option<&Probe>| p.is_some_and(Probe::socket_denial);
-    Assessment { python_success: script.is_some() && (!frame.case.boundary() || output_bytes_match),
+    Assessment {
+        #[cfg(feature="lab-python-online-pdf")]
+        attempt_status:if frame.case.online(){Some(if frame.run.is_some(){"ATTEMPTED"}else{"NOT_ATTEMPTED"})}else{None},
+        python_success: script.is_some() && (!frame.case.boundary() || output_bytes_match),
         identity: if valid_native { Verdict::ObservedPass } else { Verdict::Inconclusive },
         desktop: desktop_verdict(frame),
         outside_write, outside_read: script.as_ref().and_then(|s| s.outside_read.clone()),
@@ -696,6 +711,34 @@ pub fn online_pdf_acceptance(assessments:&[(Case,Assessment)],codex_core:bool,su
         && assessments.iter().map(|(c,_)|*c).eq(Case::ALL)
         && online_fetch_verified && install_artifacts_verified && pdf_artifacts_verified && relay_cleanup_verified
         && assessments.iter().filter(|(case,_)|case.online()).all(|(_,a)|a.python_success
-            && a.identity==Verdict::ObservedPass && a.desktop!=Verdict::PolicyBoundaryFail)
+            && a.attempt_status==Some("ATTEMPTED") && a.identity==Verdict::ObservedPass && a.desktop!=Verdict::PolicyBoundaryFail)
         && !any_policy_boundary_failure(assessments)
+}
+
+
+#[cfg(feature="lab-python-online-pdf")]
+pub const PDF_INSTALL_DEPENDENCY_FAILED:&str="SKIPPED_DEPENDENCY: online-install prerequisite did not pass";
+/// An explicit absent process, never a fabricated successful RunResult or cleanup.
+#[cfg(feature="lab-python-online-pdf")]
+pub fn skipped_online_pdf(account_sid:&str,capability_sid:&str,private_desktop:&str)->Frame {
+    Frame {case:Case::OnlinePdf,account_sid:account_sid.into(),capability_sid:capability_sid.into(),
+        private_desktop:private_desktop.into(),run:None,launch_error:Some(PDF_INSTALL_DEPENDENCY_FAILED.into()),
+        execution_window:None,native:NativeEvidence::default(),candidate_token:None,session_token:None,codex_token:None}
+}
+#[cfg(feature="lab-python-online-pdf")]
+impl Frame {
+    pub fn is_pdf_dependency_skipped(&self)->bool {
+        if self.case!=Case::OnlinePdf{return false;}
+        let expected=skipped_online_pdf(&self.account_sid,&self.capability_sid,&self.private_desktop);
+        serde_json::to_value(self).is_ok_and(|actual|
+            serde_json::to_value(expected).is_ok_and(|expected|actual==expected))
+    }
+}
+/// Both endpoints independently require the original-token, actual-process,
+/// bounded script/import/report and retained-handle cleanup evidence. No marker-only gate.
+#[cfg(feature="lab-python-online-pdf")]
+pub fn online_install_prerequisite_met(frame:&Frame)->bool {
+    frame.case==Case::OnlineInstall && frame.launch_error.is_none() && frame.cleanup_verified()
+        && native_valid(frame) && parse_script(frame).is_ok()
+        && desktop_verdict(frame)!=Verdict::PolicyBoundaryFail
 }

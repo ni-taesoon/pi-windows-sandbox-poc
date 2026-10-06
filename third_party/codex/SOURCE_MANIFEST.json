@@ -295,13 +295,13 @@
       "destination": "native/windows-sandbox/src/python_isolation.rs",
       "upstream": [],
       "origin": "new default-off fixed Python acceptance laboratory source",
-      "adapted_sha256": "4f4698afb15235723c6095d7ae5d9b726374cfd9f1a7ccd3c49ceb78c377d558"
+      "adapted_sha256": "2f7f55836289f52a9fb288e0102469064130f9e2686cfc68c93dc4491298ffc6"
     },
     {
       "destination": "native/windows-sandbox/src/python_isolation/broker.rs",
       "upstream": [],
       "origin": "new default-off fixed Python acceptance laboratory source",
-      "adapted_sha256": "6e35a24a7fc6ac4213cd7e5fefe604793536a5722c9c1ac8cd9b8fe3b51c5698"
+      "adapted_sha256": "02f8aeea0e28e43be27bfa591a2bfae3657c0f982b838705bcfbd9dd39754489"
     },
     {
       "destination": "native/windows-sandbox/src/python_isolation/observer.rs",
