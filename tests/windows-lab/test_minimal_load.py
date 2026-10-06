@@ -201,7 +201,12 @@ class SourceContracts(unittest.TestCase):
         self.assertIn('FixedLoadRequest::new(request.clone())?', process)
         self.assertIn('run_impl(ChildLaunch::FixedAccountControl', process)
         self.assertIn('#[cfg(feature = "lab-minimal-load-comparison")]\n    FixedAccountControl,', process)
-        self.assertEqual(process.count('=> CreateProcessW('), 1)
+        self.assertEqual(process.count('=> CreateProcessW('), 2)
+        # The second spelling is another mutually exclusive, default-off fixed
+        # laboratory control. Neither is available to the product protocol.
+        self.assertIn('#[cfg(feature = "lab-python-isolation-acceptance")]\n        ChildLaunch::FixedPythonAccountControl => CreateProcessW(', process)
+        self.assertIn('FixedRequest::new(request.clone())?.case() == crate::python_isolation::Case::OrdinaryOutside', process)
+        self.assertIn('Python isolation acceptance must be built alone', (base / 'src/lib.rs').read_text())
         for forbidden in ['FixedAccountControl', 'FixedMinimalLoad', 'unrestricted']:
             self.assertNotIn(forbidden, protocol)
         self.assertNotIn('token == 0', process)
@@ -210,6 +215,28 @@ class SourceContracts(unittest.TestCase):
 
     def test_production_runner_preparation_and_cleanup_are_byte_identical(self):
         source = (ROOT / 'native/windows-sandbox/src/process.rs').read_text()
+        # Remove ONLY these exact reviewed, feature-gated observation hooks.
+        # Their shape is checked before removal, then original production bytes
+        # still have to match PR 28. This is not a Windows behavior assertion.
+        hooks = [
+            '    #[cfg(feature = "lab-python-isolation-acceptance")]\n'
+            '    let creation_flags = creation_flags | if observer.is_some() { CREATE_SUSPENDED } else { 0 };\n',
+            '    #[cfg(feature = "lab-python-isolation-acceptance")]\n'
+            '    if let Some(observer) = observer.as_deref_mut() {\n'
+            '        observer.root(&process, info.dwProcessId, info.dwThreadId, &job);\n'
+            '        ensure!(ResumeThread(_thread.raw()) != u32::MAX, "fixed Python resume failed");\n'
+            '    }\n',
+            '        #[cfg(feature = "lab-python-isolation-acceptance")]\n'
+            '        if let Some(observer) = observer.as_deref_mut() { observer.poll(&process, &job); }\n',
+            '    #[cfg(feature = "lab-python-isolation-acceptance")]\n'
+            '    if let Some(observer) = observer.as_deref_mut() { observer.finish(&job); }\n',
+        ]
+        for hook in hooks:
+            self.assertEqual(source.count(hook), 1)
+            source = source.replace(hook, '')
+        boundary = '\n/// Fixed lab wrapper; ordinary launch is limited to the outside-world baseline.\n'
+        self.assertEqual(source.count(boundary), 1)
+        source = source.split(boundary)[0]
         # Hash only unchanged shared preparation and cleanup from PR 28. The
         # creation dispatch is separately checked; no Windows behavior is claimed.
         preparation = source[source.index('    ensure!(\n        private_desktop'):source.index('    let created = match launch')]

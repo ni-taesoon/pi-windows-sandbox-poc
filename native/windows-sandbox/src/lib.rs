@@ -5,6 +5,13 @@
     any(feature = "lab-loader-trace", feature = "lab-loader-probe", feature = "lab-sechost-breakpoints")
 ))]
 compile_error!("minimal load comparison cannot be combined with advanced diagnostic features");
+#[cfg(all(feature = "lab-python-isolation-acceptance", any(
+    feature = "lab-minimal-load-comparison", feature = "lab-pinned-codex-token-comparison",
+    feature = "lab-loader-trace", feature = "lab-loader-probe", feature = "lab-sechost-breakpoints"
+)))]
+compile_error!("Python isolation acceptance must be built alone without DLL laboratory features");
+#[cfg(feature = "lab-python-isolation-acceptance")]
+pub mod python_isolation;
 pub mod policy_masks;
 pub mod protocol;
 #[cfg(feature = "lab-minimal-load-comparison")]

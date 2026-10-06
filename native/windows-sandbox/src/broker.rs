@@ -843,3 +843,9 @@ mod tests {
         }
     }
 }
+
+#[cfg(feature = "lab-python-isolation-acceptance")]
+#[path = "python_isolation/broker.rs"]
+mod python_isolation_lab;
+#[cfg(feature = "lab-python-isolation-acceptance")]
+pub use python_isolation_lab::{fixed_python_isolation_helper_main, run_fixed_python_acceptance};
