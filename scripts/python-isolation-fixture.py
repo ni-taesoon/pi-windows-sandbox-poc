@@ -14,7 +14,8 @@ OUTSIDE = ROOT / "fixtures" / "outside-world"
 MODES = frozenset(("ordinary-outside", "strict-boundary", "strict-child-normal-exit",
                    "strict-child-timeout", "pinned-boundary", "pinned-child-normal-exit",
                    "pinned-child-timeout", "candidate-boundary", "candidate-child-normal-exit",
-                   "candidate-child-timeout", "descendant-hold"))
+                   "candidate-child-timeout", "session-boundary", "session-child-normal-exit",
+                   "session-child-timeout", "descendant-hold"))
 
 def probe(action):
     try:
@@ -72,6 +73,9 @@ def main():
         return
     result["outsideRead"] = probe(lambda: read_exact(OUTSIDE / "read.txt", b"SYNTHETIC_OUTSIDE_READ\n"))
     result["outsideWrite"] = probe(lambda: write_new(OUTSIDE / (label + "-write.txt"), b"SYNTHETIC_OUTSIDE_WRITE\n"))
+    if mode == "session-boundary":
+        result["sessionGrantWrite"] = probe(lambda: write_new(
+            ROOT / "fixtures" / "outside-logon" / "session-write.txt", b"AUTHORIZED_SESSION_GRANT_OBSERVED\n"))
     if mode.endswith("boundary"):
         read_exact(WORK / "input.txt", b"PYTHON_ISOLATION_INPUT\n")
         result["inputOk"] = True

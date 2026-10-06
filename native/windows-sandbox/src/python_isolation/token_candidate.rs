@@ -1,5 +1,6 @@
-//! One lab-only token factor: strict restricting SIDs with the existing upstream
-//! default-object DACL. No product selector, extra SID, privilege or launch change.
+//! Two explicit default-off lab profiles: capability-only with upstream default
+//! object DACL, then capability plus the actual helper Logon SID with that DACL.
+//! No product selector, account/Everyone restricting SID, privilege or launch change.
 use super::*;
 use crate::python_isolation::{CandidateTokenConfiguration, DefaultDaclAce, DefaultDaclRole};
 use windows_sys::Win32::Security::{GetAce,IsValidAcl,EqualSid,ACE_HEADER,ACCESS_ALLOWED_ACE};
@@ -72,4 +73,29 @@ unsafe fn read_default_dacl(token: HANDLE,logon: *mut c_void) -> Result<Vec<Defa
         result.push(DefaultDaclAce {role,mask:ace.Mask,flags:header.AceFlags});
     }
     Ok(result)
+}
+
+#[cfg(feature="lab-python-logon-sid-comparison")]
+pub(crate) unsafe fn create_lab_logon_session_token_from(base:HANDLE,capability:*mut c_void)
+    -> Result<(HANDLE,crate::python_isolation::SessionTokenConfiguration)> {
+    // Never derive this from the already restricted strict/candidate/pinned token.
+    let base_sids=crate::python_isolation::observer::restricting_sids(base)?;
+    ensure!(base_sids.is_empty(),"session comparison requires original unrestricted helper base");
+    let mut logon=get_logon_sid_bytes(base)?;
+    let logon_ptr=logon.as_mut_ptr().cast();
+    let derived=create_token_with_caps_impl(base,&[capability],&[logon_ptr],false)?;
+    let verified=(|| -> Result<crate::python_isolation::SessionTokenConfiguration> {
+        set_default_dacl(derived,logon_ptr,&[])?;
+        let result=crate::python_isolation::SessionTokenConfiguration {
+            profile:"CAP_PLUS_ACTUAL_LOGON_UPSTREAM_DEFAULT_DACL_V1".into(),base_restricting_sid_count:0,
+            actual_logon_sid:crate::winutil::string_from_sid_bytes(&logon).map_err(anyhow::Error::msg)?,
+            restricting_sids:crate::python_isolation::observer::restricting_sids(derived)?,
+            default_dacl_aces:read_default_dacl(derived,logon_ptr)?,
+        };
+        ensure!(IsValidSid(capability) != 0,"session capability SID invalid");
+        let cap=crate::winutil::string_from_sid_bytes(std::slice::from_raw_parts(capability.cast(),
+            windows_sys::Win32::Security::GetLengthSid(capability) as usize)).map_err(anyhow::Error::msg)?;
+        ensure!(result.matches_capability(&cap),"session token exact readback mismatch");Ok(result)
+    })();
+    match verified {Ok(config)=>Ok((derived,config)),Err(error)=>{CloseHandle(derived);Err(error)}}
 }

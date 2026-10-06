@@ -1,7 +1,8 @@
 # LAB ONLY. A branch push, dispatch checkbox, or switch never grants approval.
 # Obtain explicit external action-time authorization for this reviewed source and
 # fresh win22 account/ACL/store/firewall/WFP lifecycle, including the synthetic
-# outside-world Everyone Modify leaf, loopback canaries, disable, and VM disposal.
+# outside-world Everyone Modify leaf, native-owned session grant on outside-logon,
+# loopback canaries, disable, and VM disposal.
 [CmdletBinding()]
 param(
   [Parameter(Mandatory=$true)][ValidateSet('Stage','Setup','Run','Disable')][string]$Phase,
@@ -118,7 +119,7 @@ if ($Phase -eq 'Stage') {
   $acl = [Security.AccessControl.DirectorySecurity]::new()
   $acl.SetSecurityDescriptorSddlForm("O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;$ownerSid)(A;OICI;FRFX;;;BU)")
   Set-Acl -LiteralPath $root -AclObject $acl
-  foreach ($directory in @('trusted', 'runtime', 'work', 'work\denied-write', 'work\denied-read', 'fixtures', 'fixtures\outside-world')) {
+  foreach ($directory in @('trusted', 'runtime', 'work', 'work\denied-write', 'work\denied-read', 'fixtures', 'fixtures\outside-world', 'fixtures\outside-logon')) {
     New-Item -ItemType Directory -Path (Join-Path $root $directory) | Out-Null
   }
   foreach ($file in $files) {
@@ -147,7 +148,10 @@ if ($Phase -eq 'Stage') {
   }
   foreach ($directory in @($trusted, $runtime, "$root\work", "$root\fixtures")) { Invoke-Icacls -Arguments @($directory, '/reset', '/T', '/Q') }
   Invoke-Icacls -Arguments @($root, '/setowner', '*S-1-5-32-544', '/T', '/Q')
-  # This sole explicit exception is a newly created synthetic negative-control
+  # outside-logon retains the protected inherited root ACL and BA ownership.
+  # Only the native broker may later grant the authenticated helper Logon SID,
+  # after ten durable control frames. Staging never selects or grants that SID.
+  # This sole staging exception is a newly created synthetic negative-control
   # leaf, never an executable/input location. No real user directory is changed.
   Invoke-Icacls -Arguments @("$root\fixtures\outside-world", '/grant:r', '*S-1-1-0:(OI)(CI)(M)', '/Q')
   [ordered]@{
@@ -163,7 +167,8 @@ if ($Phase -eq 'Stage') {
     driverSha256=$ExpectedDriverSha256.ToLowerInvariant(); helperSha256=$ExpectedHelperSha256.ToLowerInvariant();
     fixtureSha256=$ExpectedFixtureSha256.ToLowerInvariant(); pythonSha256=$ExpectedPythonSha256.ToLowerInvariant();
     runtimeManifestSha256=(Get-FileHash -LiteralPath $runtimeManifest -Algorithm SHA256).Hash.ToLowerInvariant();
-    runtimeFileCount=$inputs.Count; pythonVersion='3.12.10'; pythonFileVersion=$pythonFileVersion; nativeValidated=$false
+    runtimeFileCount=$inputs.Count; pythonVersion='3.12.10'; pythonFileVersion=$pythonFileVersion;
+    outsideLogonInitiallyProtected=$true; outsideLogonGrantOwner='native-verified-helper-logon-only'; nativeValidated=$false
   } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $stageEvidence -Encoding UTF8
   Write-Output 'LAB_PYTHON_ISOLATION_STAGED_ONLY: no account, fixture execution or network probe. Native setup creates fixed benign content.'
   exit 0
@@ -192,7 +197,7 @@ if ($Phase -ne 'Disable') {
     $expected = $manifest.inputs.PSObject.Properties[$entry.source]
     if ($null -eq $expected -or $entry.sha256 -cne $expected.Value) { throw 'Runtime all-file hash verification failed.' }
   }
-  foreach ($directory in @('work\denied-read', 'work\denied-write', 'fixtures\outside-world')) {
+  foreach ($directory in @('work\denied-read', 'work\denied-write', 'fixtures\outside-world', 'fixtures\outside-logon')) {
     $path = Join-Path $root $directory
     Assert-LabSourceAncestors -Path $path -Role 'existing-synthetic-policy-root'
     if (-not (Get-Item -LiteralPath $path -Force).PSIsContainer) { throw 'All fixed policy roots must already exist.' }
