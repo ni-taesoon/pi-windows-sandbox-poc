@@ -435,7 +435,7 @@ fn failed_final_account_or_capability_grant_check_rolls_back_every_target() {
         let checked = RefCell::new(Vec::new());
         let failure = apply_and_verify(
             &[EditKind::Deny, EditKind::Grant, EditKind::Deny, EditKind::Grant],
-            |_| Ok(()),
+            |_| Ok::<(), GrantCoverageFailure>(()),
             |index| {
                 if index == 0 || index == 2 { return Ok(()); }
                 for principal in ["account", "capability"] {
