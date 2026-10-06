@@ -24,6 +24,19 @@ enum HelperExecution {
     Restricted,
     #[cfg(feature = "lab-minimal-load-comparison")]
     FixedMinimalLoad,
+    #[cfg(feature = "lab-pinned-codex-token-comparison")]
+    FixedPinnedCodexToken,
+}
+#[cfg(feature = "lab-minimal-load-comparison")]
+impl HelperExecution {
+    fn is_fixed_comparison(self) -> bool {
+        match self {
+            Self::Restricted => false,
+            Self::FixedMinimalLoad => true,
+            #[cfg(feature = "lab-pinned-codex-token-comparison")]
+            Self::FixedPinnedCodexToken => true,
+        }
+    }
 }
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -332,6 +345,8 @@ pub unsafe fn run_via_dedicated_helper(
     run_helper_impl(store_path, helper_exe, request, HelperExecution::Restricted,
         #[cfg(feature = "lab-minimal-load-comparison")]
         None,
+        #[cfg(feature = "lab-pinned-codex-token-comparison")]
+        None,
     )
 }
 
@@ -351,7 +366,56 @@ pub unsafe fn run_fixed_minimal_load_comparison(
         && helper_exe == Path::new(r"C:\PiSandboxLab\trusted\pi-windows-sandbox.exe"),
         "fixed lab store/helper required");
     run_helper_impl(store_path, helper_exe, request.into_request(),
-        HelperExecution::FixedMinimalLoad, Some(record_account))
+        HelperExecution::FixedMinimalLoad, Some(record_account),
+        #[cfg(feature = "lab-pinned-codex-token-comparison")]
+        None,
+    )
+}
+
+/// Extra pinned-token condition for the immutable no-argument loader only.
+/// This is never a production policy selector or an execution fallback.
+/// # Safety
+/// All fixed comparison prerequisites apply. Explicit authorization must cover
+/// the broader pinned token/default-DACL policy in this disposable offline lab.
+/// The recorder must persist each frame and reject incomplete strict observations
+/// before returning, because its success permits the extra fixed child to start.
+#[cfg(feature = "lab-pinned-codex-token-comparison")]
+pub unsafe fn run_fixed_pinned_codex_token_comparison(
+    store_path: &Path,
+    helper_exe: &Path,
+    request: crate::minimal_load::FixedLoadRequest,
+    record_account: &mut dyn FnMut(&crate::minimal_load::AccountControlAttempt) -> Result<()>,
+    record_pinned: &mut dyn FnMut(&crate::minimal_load::PinnedTokenFrame) -> Result<()>,
+) -> Result<RunResult> {
+    ensure!(store_path == Path::new(r"C:\PiSandboxLab\store")
+        && helper_exe == Path::new(r"C:\PiSandboxLab\trusted\pi-windows-sandbox.exe"),
+        "fixed lab store/helper required");
+    run_helper_impl(store_path, helper_exe, request.into_request(),
+        HelperExecution::FixedPinnedCodexToken, Some(record_account), Some(record_pinned))
+}
+
+#[cfg(feature = "lab-pinned-codex-token-comparison")]
+fn receive_pinned_token_comparison(
+    pipe: &Pipe,
+    deadline: Instant,
+    record: &mut dyn FnMut(&crate::minimal_load::PinnedTokenFrame) -> Result<()>,
+) -> Result<RunResult> {
+    use crate::minimal_load::{PinnedTokenFrame, PinnedTokenReady};
+    let strict_frame: PinnedTokenFrame = pipe.receive(deadline)
+        .context("unchanged strict observation unavailable; pinned-token child NOT_ATTEMPTED")?;
+    let strict = strict_frame.expect_unchanged_strict()?;
+    record(&strict_frame)?;
+    ensure!(strict.can_continue(), "strict cleanup incomplete; pinned-token child NOT_ATTEMPTED");
+    let result = strict.run().context("strict result missing")?.clone();
+    // The helper cannot create the pinned-token child before durable evidence.
+    pipe.send(&PinnedTokenReady::StrictEvidenceRecorded, deadline)?;
+    let pinned_frame: PinnedTokenFrame = pipe.receive(deadline)
+        .context("pinned-token observation unavailable; strict evidence retained")?;
+    let pinned = pinned_frame.expect_pinned_codex_token()?;
+    record(&pinned_frame)?;
+    ensure!(pinned.can_continue(), "pinned-token process completion/cleanup unverified");
+    // Return only the unchanged strict result, never the compatibility result.
+    Ok(result)
 }
 
 unsafe fn run_helper_impl(
@@ -361,13 +425,18 @@ unsafe fn run_helper_impl(
     execution: HelperExecution,
     #[cfg(feature = "lab-minimal-load-comparison")]
     mut record_account: Option<&mut dyn FnMut(&crate::minimal_load::AccountControlAttempt) -> Result<()>>,
+    #[cfg(feature = "lab-pinned-codex-token-comparison")]
+    record_pinned: Option<&mut dyn FnMut(&crate::minimal_load::PinnedTokenFrame) -> Result<()>>,
 ) -> Result<RunResult> {
     request.validate()?;
     #[cfg(feature = "lab-minimal-load-comparison")]
-    if matches!(execution, HelperExecution::FixedMinimalLoad) {
+    if execution.is_fixed_comparison() {
         crate::minimal_load::FixedLoadRequest::new(request.clone())?;
         ensure!(record_account.is_some(), "fixed control recorder required");
     }
+    #[cfg(feature = "lab-pinned-codex-token-comparison")]
+    ensure!(matches!(execution, HelperExecution::FixedPinnedCodexToken) == record_pinned.is_some(),
+        "pinned-token recorder/mode mismatch");
     let current = Handle::from_raw(token::get_current_token_for_restriction()?)?;
     let owner = winutil::string_from_sid_bytes(&token::get_user_sid_bytes(current.raw())?)
         .map_err(anyhow::Error::msg)?;
@@ -381,6 +450,8 @@ unsafe fn run_helper_impl(
         HelperExecution::Restricted => "internal-experimental-helper",
         #[cfg(feature = "lab-minimal-load-comparison")]
         HelperExecution::FixedMinimalLoad => "internal-fixed-minimal-load-helper",
+        #[cfg(feature = "lab-pinned-codex-token-comparison")]
+        HelperExecution::FixedPinnedCodexToken => "internal-fixed-pinned-codex-token-helper",
     };
     let args = vec![
         command.into(),
@@ -428,10 +499,13 @@ unsafe fn run_helper_impl(
         // Two bounded runs, their cleanup, and bounded result transport. No retry.
         #[cfg(feature = "lab-minimal-load-comparison")]
         HelperExecution::FixedMinimalLoad => Duration::from_secs(70),
+        // Three bounded dedicated-account runs and one evidence acknowledgement.
+        #[cfg(feature = "lab-pinned-codex-token-comparison")]
+        HelperExecution::FixedPinnedCodexToken => Duration::from_secs(105),
     };
     let response_deadline = Instant::now() + response_budget;
     #[cfg(feature = "lab-minimal-load-comparison")]
-    if matches!(execution, HelperExecution::FixedMinimalLoad) {
+    if execution.is_fixed_comparison() {
         let account: crate::minimal_load::AccountControlAttempt = pipe.receive(response_deadline)
             .context("fixed account control unavailable; restricted result unavailable")?;
         record_account.as_mut().context("fixed control recorder missing")?(&account)?;
@@ -460,6 +534,15 @@ unsafe fn run_helper_impl(
             serde_json::to_string(&loader_trace)?
         );
     }
+    #[cfg(feature = "lab-pinned-codex-token-comparison")]
+    let result: RunResult = if matches!(execution, HelperExecution::FixedPinnedCodexToken) {
+        receive_pinned_token_comparison(&pipe, response_deadline,
+            record_pinned.context("pinned-token recorder missing")?)?
+    } else {
+        pipe.receive(response_deadline)
+            .context("helper failed; account ACLs retained for verified recovery")?
+    };
+    #[cfg(not(feature = "lab-pinned-codex-token-comparison"))]
     let result: RunResult = pipe
         .receive(response_deadline)
         .context("helper failed; account ACLs retained for verified recovery")?;
@@ -484,6 +567,10 @@ pub fn helper_main(name: &str, expected_broker: u32) -> Result<()> {
 pub fn fixed_minimal_load_helper_main(name: &str, expected_broker: u32) -> Result<()> {
     helper_main_impl(name, expected_broker, HelperExecution::FixedMinimalLoad)
 }
+#[cfg(feature = "lab-pinned-codex-token-comparison")]
+pub fn fixed_pinned_codex_token_helper_main(name: &str, expected_broker: u32) -> Result<()> {
+    helper_main_impl(name, expected_broker, HelperExecution::FixedPinnedCodexToken)
+}
 fn helper_main_impl(name: &str, expected_broker: u32, execution: HelperExecution) -> Result<()> {
     ensure!(expected_broker > 0, "missing broker identity");
     let pipe = Pipe::open(name, expected_broker)?;
@@ -495,6 +582,8 @@ fn helper_main_impl(name: &str, expected_broker: u32, execution: HelperExecution
     #[cfg(feature = "lab-minimal-load-comparison")]
     let fixed_request = match execution {
         HelperExecution::FixedMinimalLoad => Some(crate::minimal_load::FixedLoadRequest::new(request.clone())?),
+        #[cfg(feature = "lab-pinned-codex-token-comparison")]
+        HelperExecution::FixedPinnedCodexToken => Some(crate::minimal_load::FixedLoadRequest::new(request.clone())?),
         HelperExecution::Restricted => None,
     };
     let _ = execution;
@@ -531,6 +620,33 @@ fn helper_main_impl(name: &str, expected_broker: u32, execution: HelperExecution
             pipe.send(&account, Instant::now() + Duration::from_secs(10))?;
             ensure!(account.can_continue(),
                 "fixed account control incomplete; restricted child NOT_ATTEMPTED");
+        }
+        #[cfg(feature = "lab-pinned-codex-token-comparison")]
+        if matches!(execution, HelperExecution::FixedPinnedCodexToken) {
+            use crate::minimal_load::{AccountControlAttempt, PinnedTokenFrame, PinnedTokenReady};
+            let fixed = fixed_request.as_ref().context("fixed pinned-token request missing")?;
+            let strict = AccountControlAttempt::from_result(crate::process::run_restricted_with_parent(
+                restricted.raw(), &payload.private_desktop, fixed.request(), &parent));
+            pipe.send(&PinnedTokenFrame::UnchangedStrict { attempt: strict.clone() },
+                Instant::now() + Duration::from_secs(10))?;
+            ensure!(strict.can_continue(), "strict cleanup incomplete; pinned-token child NOT_ATTEMPTED");
+            let _: PinnedTokenReady = pipe.receive(Instant::now() + Duration::from_secs(10))
+                .context("strict evidence acknowledgement missing; pinned-token child NOT_ATTEMPTED")?;
+            let pinned = AccountControlAttempt::from_result((|| -> Result<RunResult> {
+                // Exact offline dedicated-runner constructor at pinned Codex
+                // a956835d020762cb2b570053af06f643a11c0ecc. Start from the original
+                // authenticated base, never the already-restricted derivative.
+                // Empty extras: no network proxy SID. No device/global ACL changes.
+                let pinned_token = Handle::from_raw(token::create_workspace_write_token_with_caps_and_user_from(
+                    base.raw(), &[cap.as_ptr()], &[],
+                )?)?;
+                crate::process::run_restricted_with_parent(
+                    pinned_token.raw(), &payload.private_desktop, fixed.request(), &parent)
+            })());
+            pipe.send(&PinnedTokenFrame::PinnedCodexToken { attempt: pinned.clone() },
+                Instant::now() + Duration::from_secs(10))?;
+            ensure!(pinned.can_continue(), "pinned-token process completion/cleanup unverified");
+            return Ok(());
         }
         #[cfg(not(feature = "lab-minimal-load-comparison"))]
         {
