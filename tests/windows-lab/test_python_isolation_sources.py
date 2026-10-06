@@ -114,6 +114,7 @@ class PythonIsolationWorkflowContracts(unittest.TestCase):
             'cargo build --locked --no-default-features --features lab-python-isolation-acceptance',
             'cargo test --locked --no-default-features --features lab-python-isolation-acceptance',
             '--test python_isolation_contract',
+            '--test admission_policy_contract',
             '-m unittest discover -s tests/windows-lab -p test_python_isolation_sources.py',
             '-I -S -B tests/python-probe/test_isolation_fixture.py',
         ]:
@@ -139,6 +140,9 @@ class PythonIsolationWorkflowContracts(unittest.TestCase):
             'native/windows-sandbox/src/python_isolation.rs',
             'native/windows-sandbox/src/python_isolation/broker.rs',
             'native/windows-sandbox/src/python_isolation/observer.rs',
+            'native/windows-sandbox/src/admission.rs',
+            'native/windows-sandbox/src/admission_plan.rs',
+            'native/windows-sandbox/tests/admission_policy_contract.rs',
             'native/windows-sandbox/examples/python_isolation_acceptance.rs',
             'native/windows-sandbox/examples/python_isolation_acceptance/windows.rs',
             'native/windows-sandbox/tests/python_isolation_contract.rs',
@@ -199,8 +203,8 @@ class PythonIsolationWorkflowContracts(unittest.TestCase):
         self.assertIn('exit 0', observation)
         self.assertIn('provesConnectionBlocking=$false', observation)
         self.assertIn('liveConnectionObservationsAuthoritative=$true', observation)
-        self.assertIn("observation='INCONCLUSIVE'", observation)
-        for reason in ['MISSING_RULE', 'DUPLICATE_RULE', 'QUERY_OR_PROPERTY_UNAVAILABLE']:
+        self.assertIn("else { 'INCONCLUSIVE' }", observation)
+        for reason in ['MISSING_OBJECT', 'DUPLICATE_OBJECT', 'QUERY_ERROR', 'FIELD_ERROR']:
             self.assertIn(reason, observation)
         run = source.split('        id: run', 1)[1].split('      - name:', 1)[0]
         self.assertNotIn('firewall_observation', run)
@@ -223,37 +227,72 @@ class PythonIsolationWorkflowContracts(unittest.TestCase):
                           'pktmon ', 'netsh.exe', 'Get-NetFirewallProfile', 'Get-LocalUser',
                           'Get-NetFirewallRule -All', 'Get-NetFirewallRule -DisplayName']:
             self.assertNotIn(forbidden, observation)
-        self.assertIn('$rules.Count -ne 1', observation)
-        self.assertIn('$address.Count -ne 1', observation)
-        self.assertIn('$port.Count -ne 1', observation)
-        self.assertIn('$security.Count -ne 1', observation)
+        self.assertIn('$items.Count -ne 1', observation)
+        for stage in ['RULE_QUERY', 'ADDRESS_QUERY', 'PORT_QUERY', 'SECURITY_QUERY']:
+            self.assertIn("Query-One '" + stage + "'", observation)
 
     def test_firewall_metadata_serializes_only_normalized_status_and_scope_facts(self):
         observation = self.firewall_observation()
-        observed = observation.split("name=$spec.name; observation='OBSERVED'", 1)[1].split('              }', 1)[0]
-        for field in ['enforcementStatus=$enforcement', 'primaryStatus=(Safe-Enum',
-                      'action=$action', 'direction=$direction', 'enabled=$enabled',
-                      'profile=$profile', 'protocol=$protocol', 'expectedMatches=$matches']:
-            self.assertIn(field, observed)
+        for field in ['enforcementStatus=(Read-Fact', 'primaryStatus=(Read-Fact',
+                      'action=(Read-Fact', 'direction=(Read-Fact', 'enabled=(Read-Fact',
+                      'profile=(Read-Fact', 'protocol=(Read-Fact', 'expectedMatches=$matches']:
+            self.assertIn(field, observation)
         for field in ['localAddressAny=', 'remoteAddressScope=', 'localPortAny=',
                       'remotePortAny=', 'localUserScope=', 'remoteUserAny=', 'remoteMachineAny=']:
             self.assertIn(field, observation)
-        self.assertIn('User-Scope-Matches $security[0].LocalUser $accountSid', observation)
+        self.assertIn("User-Scope-Matches (Property-Value $security 'LocalUser') $accountSid", observation)
         self.assertIn('$descriptor.DiscretionaryAcl.Count -ne 1', observation)
         self.assertIn('$ace.AccessMask -eq 1', observation)
         self.assertIn('$ace.SecurityIdentifier.Value -ceq $Sid', observation)
-        for forbidden in ['accountSid=$accountSid', 'localUser=$', 'SDDL=', '$_.Exception',
+        for forbidden in ['accountSid=$accountSid', 'localUser=$', 'SDDL=', '.Exception.Message',
                           '$_.ToString', '$rule | ConvertTo-Json', '$security | ConvertTo-Json',
-                          'Format-List', 'Format-Table', 'Write-Error', 'Write-Warning']:
+                          'Format-List', 'Format-Table', 'Write-Error', 'Write-Warning',
+                          'FullyQualifiedErrorId', 'TargetObject', 'ScriptStackTrace', '.Exception.ToString']:
             self.assertNotIn(forbidden, observation)
         self.assertIn("return 'UNKNOWN'", observation)
         self.assertIn("'LocalUserEmpty'", observation)
         self.assertIn("'LocalFirewallRulesDisallowed'", observation)
-        self.assertIn("$entry.reason='BASELINE_IDENTITY_UNAVAILABLE'", observation)
+        self.assertIn("Diagnostic 'BASELINE_IDENTITY' 'INCONCLUSIVE' 'BASELINE_ERROR' $_", observation)
         self.assertIn('[Net.IPAddress]::Parse', observation)
         self.assertNotIn('GetHost', observation)
         self.assertNotIn('TcpClient', observation)
         self.assertNotIn('socket', executable_lines(observation))
+
+    def test_firewall_query_and_field_failures_preserve_independent_results(self):
+        observation = self.firewall_observation()
+        query = observation.split('function Query-One(', 1)[1].split('function Read-Fact(', 1)[0]
+        fact = observation.split('function Read-Fact(', 1)[1].split('function Protocol-Value(', 1)[0]
+        self.assertIn("catch { return @{ item=$null; diagnostic=(Diagnostic $Stage 'INCONCLUSIVE' 'QUERY_ERROR' $_) }", query)
+        self.assertIn("Diagnostic $Stage 'INCONCLUSIVE' 'FIELD_ERROR' $_", fact)
+        self.assertIn('$fact.value=$null', fact)
+        loop = observation.split('foreach ($spec in $specifications) {', 1)[1]
+        self.assertNotIn('$entry =', loop)
+        self.assertEqual(loop.count('$entries.Add('), 1)
+        for field, stage in [('enforcementStatus', 'ENFORCEMENT_STATUS'), ('action', 'ACTION'),
+                             ('protocol', 'PROTOCOL'), ('remoteAddressScope', 'REMOTE_ADDRESS'),
+                             ('localUserScope', 'LOCAL_USER_SCOPE')]:
+            self.assertIn(f"{field}=(Read-Fact '{stage}'", loop)
+        self.assertIn('queries=$queryDiagnostics; fields=$fields;', loop)
+        self.assertIn("if ($Fact.status -cne 'OBSERVED') { return $null }", observation)
+        self.assertIn('expectedMatchesComplete=', observation)
+        self.assertIn('schemaVersion=2;', observation)
+
+    def test_firewall_error_metadata_is_stage_enum_and_numeric_only(self):
+        observation = self.firewall_observation()
+        diagnostic = observation.split('function Diagnostic(', 1)[1].split('function Property-Value(', 1)[0]
+        self.assertIn('[int]$Record.Exception.HResult', diagnostic)
+        self.assertIn('Safe-Enum $Record.CategoryInfo.Category', diagnostic)
+        self.assertIn('hresult=$code; errorCategory=$category', diagnostic)
+        self.assertNotIn('$Record.Exception;', diagnostic)
+        self.assertNotIn('.Message', diagnostic)
+        self.assertNotIn('InnerException', diagnostic)
+        self.assertIn('$value -isnot [bool]', observation)
+        self.assertIn('$factEnums -cnotcontains $value', observation)
+        self.assertIn("'UNSAFE_FIELD_TYPE'", observation)
+        self.assertIn("'UNRECOGNIZED_VALUE'", observation)
+        self.assertIn("'6' { return 'TCP' }", observation)
+        self.assertIn("'17' { return 'UDP' }", observation)
+        self.assertIn("'256' { return 'Any' }", observation)
 
     def test_firewall_metadata_has_one_exact_artifact_destination(self):
         observation = self.firewall_observation()

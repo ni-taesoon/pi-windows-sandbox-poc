@@ -5,6 +5,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 pub const ROOT: &str = r"C:\PiSandboxLab";
+pub const CONHOST: &str = r"C:\Windows\System32\conhost.exe";
 pub const PYTHON: &str = r"C:\PiSandboxLab\runtime\python.exe";
 pub const SCRIPT: &str = r"C:\PiSandboxLab\trusted\python-isolation-fixture.py";
 pub const WORK: &str = r"C:\PiSandboxLab\work";
@@ -53,10 +54,16 @@ impl FixedRequest {
     pub(crate) fn into_request(self) -> RunRequest { self.request }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "SCREAMING_SNAKE_CASE", deny_unknown_fields)]
+pub enum DesktopEvidence {
+    Observed { name: String },
+    Unavailable { error: String },
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IdentityEvidence {
     pub pid: u32, pub image: String, pub user_sid: String, pub restricting_sids: Vec<String>,
-    pub desktop: String, pub exact_job_member: bool, pub retained_handle_signaled: bool,
+    pub desktop: DesktopEvidence, pub exact_job_member: bool, pub retained_handle_signaled: bool,
 }
 /// Bounded diagnostic metadata; never substitutes for identity or cleanup evidence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -108,6 +115,8 @@ impl NativeDiagnostics {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NativeEvidence {
     pub root: Option<IdentityEvidence>, pub descendants: Vec<IdentityEvidence>,
+    #[serde(default)]
+    pub console_hosts: Vec<IdentityEvidence>,
     pub error: Option<String>, pub job_empty: bool, pub unobserved_handles_signaled: bool,
     #[serde(default)]
     pub diagnostics: NativeDiagnostics,
@@ -124,6 +133,7 @@ impl Frame {
             && self.native.job_empty && self.native.unobserved_handles_signaled
             && self.native.root.as_ref().map_or(true, |r| r.retained_handle_signaled)
             && self.native.descendants.iter().all(|c| c.retained_handle_signaled)
+            && self.native.console_hosts.iter().all(|c| c.retained_handle_signaled)
     }
 }
 #[derive(Serialize, Deserialize)]
@@ -193,21 +203,40 @@ pub fn native_valid(frame: &Frame) -> bool {
             vec![frame.capability_sid.as_str(), frame.account_sid.as_str(), "S-1-1-0"]
         } else { vec![frame.capability_sid.as_str()] };
     let valid = |e: &IdentityEvidence| e.user_sid == frame.account_sid && e.image.eq_ignore_ascii_case(PYTHON)
-        && e.desktop == frame.private_desktop && e.exact_job_member && e.retained_handle_signaled
+        && e.exact_job_member && e.retained_handle_signaled
         && expected_restrictors.iter().all(|s| e.restricting_sids.iter().any(|x| x == s))
         && if frame.case == Case::OrdinaryOutside { e.restricting_sids.is_empty() }
             else if frame.case.pinned() { e.restricting_sids.len() == 4 }
             else { e.restricting_sids.len() == 1 };
     frame.native.error.is_none() && frame.cleanup_verified() && frame.native.root.as_ref().is_some_and(valid)
+        && frame.native.console_hosts.len() <= 1 && frame.native.console_hosts.iter().all(|host|
+            host.image.eq_ignore_ascii_case(CONHOST) && host.user_sid == frame.account_sid
+            && host.exact_job_member && host.retained_handle_signaled)
         && if frame.case.descendant() { frame.native.descendants.len() == 1 && frame.native.descendants.iter().all(|e| valid(e) && frame.native.root.as_ref().is_some_and(|r| r.restricting_sids == e.restricting_sids)) }
            else { frame.native.descendants.is_empty() }
+}
+/// Desktop observation is independent of token/Job identity. GetThreadDesktop may
+/// be unavailable for a console-only thread; expected startup settings are not proof.
+/// UOI_NAME returns the actual desktop leaf name, not a verified window-station path.
+pub fn desktop_verdict(frame: &Frame) -> Verdict {
+    let expected = frame.private_desktop.rsplit('\\').next().unwrap_or("");
+    let mut unavailable = frame.native.root.is_none()
+        || (frame.case.descendant() && frame.native.descendants.len() != 1);
+    for identity in frame.native.root.iter().chain(frame.native.descendants.iter()) {
+        match &identity.desktop {
+            DesktopEvidence::Observed {name} if name != expected => return Verdict::PolicyBoundaryFail,
+            DesktopEvidence::Observed {..} => {},
+            DesktopEvidence::Unavailable {..} => unavailable = true,
+        }
+    }
+    if unavailable { Verdict::Inconclusive } else { Verdict::ObservedPass }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Verdict { ObservedPass, PolicyBoundaryFail, Inconclusive, NotTested }
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Assessment { pub python_success: bool, pub identity: Verdict, pub outside_write: Verdict,
+pub struct Assessment { pub python_success: bool, pub identity: Verdict, pub desktop: Verdict, pub outside_write: Verdict,
     pub outside_read: Option<Probe>, pub broad_read_truth: Verdict, pub explicit_denies: Verdict, pub loopback_only: Verdict,
     pub descendant_cleanup: Verdict, pub parent_death: Verdict, pub full_pass: bool }
 pub fn assess(frame: &Frame, output_bytes_match: bool, ordinary_outside_write_succeeded: bool,
@@ -223,6 +252,7 @@ pub fn assess(frame: &Frame, output_bytes_match: bool, ordinary_outside_write_su
     let socket_deny = |p: Option<&Probe>| p.is_some_and(Probe::socket_denial);
     Assessment { python_success: script.is_some() && (!frame.case.boundary() || output_bytes_match),
         identity: if valid_native { Verdict::ObservedPass } else { Verdict::Inconclusive },
+        desktop: desktop_verdict(frame),
         outside_write, outside_read: script.as_ref().and_then(|s| s.outside_read.clone()),
         broad_read_truth: if boundary.is_some_and(|s| matches!(s.outside_read, Some(Probe::Success))) { Verdict::ObservedPass } else { Verdict::Inconclusive },
         explicit_denies: if boundary.is_some_and(|s| file_deny(s.denied_read.as_ref()) && file_deny(s.denied_write.as_ref())) { Verdict::ObservedPass } else if boundary.is_some_and(|s| matches!(s.denied_read, Some(Probe::Success)) || matches!(s.denied_write, Some(Probe::Success))) { Verdict::PolicyBoundaryFail } else { Verdict::Inconclusive },

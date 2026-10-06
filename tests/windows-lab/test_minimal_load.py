@@ -148,9 +148,11 @@ class SourceContracts(unittest.TestCase):
         self.assertEqual(broker.count('#[cfg(not(feature = "lab-minimal-load-comparison"))]'), 2)
         self.assertIn('let result = crate::process::run_restricted_with_parent(', broker)
 
-    def test_enforcement_sources_unchanged_from_reviewed_baseline(self):
+    def test_reviewed_enforcement_source_snapshots(self):
+        # Admission now includes the reviewed deny-order/coverage restoration.
+        # Masks, token construction and network enforcement remain unchanged.
         expected = {
-            'src/admission.rs': '3f8f0a9e1e18b74bf0a12f605049e648e17fa2bda1c33872af27d5f7119e1ca3',
+            'src/admission.rs': '96695cd13d54d4add094004d07d8b09a483ad2a229ebd0036969dd5eb2a7a3a0',
             'src/token.rs': '5cf5ec4c5b1d230130dd7809a0b2b6b1b12a44d9d6b46f975ae40e6dc29bf25f',
             'src/desktop.rs': 'c8a0922a34654a20260ba906dc90c4b12e0485a9aa84a7e12bc098f5a25c4a29',
             'src/acl.rs': 'f8097901f8c17cc45f3593eb6d4cbd46e967e0081fd6c89fb2bd943f4b33c402',

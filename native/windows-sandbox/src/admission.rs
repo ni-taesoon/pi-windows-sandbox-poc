@@ -2,6 +2,7 @@
 //! Per-account ACLs are serialized by a global product lease; per-run capability
 //! ACEs constrain write access. Existing account ACEs fail closed for explicit recovery.
 use crate::{
+    admission_plan::{self, AceKind, EditKind, SimpleAce},
     desktop::PrivateDesktop,
     process::{run_restricted, Handle},
     protocol::{RunRequest, RunResult},
@@ -28,6 +29,7 @@ struct Target {
     path: PathBuf,
     mode: ACCESS_MODE,
     mask: u32,
+    is_directory: bool,
 }
 /// A trusted admission owns target pins/guards, the restricted token and desktop.
 /// Dropping without launching intentionally retains restrictive ACEs. The broker
@@ -151,6 +153,70 @@ fn already_has_sid(target: &Target, sid: *mut c_void) -> Result<bool> {
         result
     }
 }
+/// Re-read the final DACL through the original pin after all inheritance writes.
+/// Missing, malformed or complex coverage must prevent the helper from resuming.
+fn verify_final_deny(target: &Target, sid: *mut c_void) -> Result<()> {
+    unsafe {
+        let mut sd = null_mut();
+        let mut dacl = null_mut();
+        let status = GetSecurityInfo(
+            target.handle.as_raw_handle() as HANDLE,
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            null_mut(),
+            null_mut(),
+            &mut dacl,
+            null_mut(),
+            &mut sd,
+        );
+        ensure!(status == 0, "read final deny ACL failed: {status}");
+        let result = (|| -> Result<()> {
+            ensure!(
+                !dacl.is_null() && IsValidAcl(dacl) != 0,
+                "null/invalid final deny DACL unsupported"
+            );
+            let mut aces = Vec::with_capacity((*dacl).AceCount as usize);
+            for index in 0..(*dacl).AceCount {
+                let mut ace: *mut c_void = null_mut();
+                ensure!(
+                    GetAce(dacl, index as u32, &mut ace) != 0,
+                    "invalid final ACE"
+                );
+                let header = &*(ace as *const ACE_HEADER);
+                let kind = match header.AceType {
+                    0 => AceKind::Allow,
+                    1 => AceKind::Deny,
+                    _ => anyhow::bail!("complex final deny ACE unsupported"),
+                };
+                // A simple ACE has a four-byte header, a mask and a complete SID.
+                // Bound the SID before invoking native SID validation/comparison.
+                let sid_offset = std::mem::size_of::<ACE_HEADER>() + std::mem::size_of::<u32>();
+                ensure!(
+                    header.AceSize as usize >= sid_offset + 8,
+                    "short final ACE SID"
+                );
+                let ace_sid = (ace as *mut u8).add(sid_offset);
+                let sid_length = 8 + (*ace_sid.add(1) as usize) * 4;
+                ensure!(
+                    header.AceSize as usize == sid_offset + sid_length
+                        && IsValidSid(ace_sid.cast()) != 0,
+                    "invalid final ACE SID"
+                );
+                let entry = &*(ace as *const ACCESS_ALLOWED_ACE);
+                aces.push(SimpleAce {
+                    kind,
+                    flags: header.AceFlags,
+                    mask: entry.Mask,
+                    account_sid: EqualSid(ace_sid.cast(), sid) != 0,
+                });
+            }
+            admission_plan::verify_deny_coverage(&aces, target.mask, target.is_directory)
+                .map_err(|error| anyhow::anyhow!("final deny coverage failed: {error:?}"))
+        })();
+        LocalFree(sd as HLOCAL);
+        result.with_context(|| format!("verify denied target {}", target.path.display()))
+    }
+}
 fn enumerate(
     path: &Path,
     mode: ACCESS_MODE,
@@ -226,6 +292,7 @@ fn enumerate(
         path: path.to_owned(),
         mode,
         mask,
+        is_directory: metadata.is_dir(),
     });
     Ok(())
 }
@@ -334,8 +401,8 @@ impl AdmittedLaunch {
         // the suspended helper token, not a separate broker-side logon session.
         let desktop = PrivateDesktop::for_token_with_cap(base.raw(), Some(&capability_string))?;
         let (mut targets, mut pins, mut guards) = (Vec::new(), Vec::new(), Vec::new());
-        // Explicit denies first; they also cover protected-inheritance existing descendants
-        // through direct ACEs on pinned objects, and future descendants by inheritance.
+        // Retain target selection and pins. The transaction below applies all grants
+        // before denies, then verifies existing and inheritable deny coverage.
         for path in &request.policy.deny_read {
             enumerate(
                 Path::new(path),
@@ -421,27 +488,45 @@ impl AdmittedLaunch {
                 "account SID already has policy ACL; clean account ACL required"
             );
         }
-        for (index, target) in targets.iter().enumerate() {
-            let applied = edit_acl(target, account_sid.as_ptr(), target.mode, target.mask)
-                .and_then(|()| {
+        let kinds: Vec<_> = targets
+            .iter()
+            .map(|target| {
+                if target.mode == GRANT_ACCESS {
+                    EditKind::Grant
+                } else {
+                    EditKind::Deny
+                }
+            })
+            .collect();
+        admission_plan::apply_and_verify(
+            &kinds,
+            |index| {
+                let target = &targets[index];
+                edit_acl(target, account_sid.as_ptr(), target.mode, target.mask).and_then(|()| {
                     if target.mode == GRANT_ACCESS {
                         edit_acl(target, cap.as_ptr(), target.mode, target.mask)
                     } else {
                         Ok(())
                     }
-                });
-            if let Err(error) = applied {
-                let mut rollback_failed = false;
-                for previous in targets[..=index].iter().rev() {
-                    rollback_failed |=
-                        edit_acl(previous, account_sid.as_ptr(), REVOKE_ACCESS, 0).is_err();
-                    rollback_failed |= edit_acl(previous, cap.as_ptr(), REVOKE_ACCESS, 0).is_err();
-                }
-                anyhow::bail!(
-                    "policy admission failed: {error}; rollback_failed={rollback_failed}"
-                );
-            }
-        }
+                })
+            },
+            |index| verify_final_deny(&targets[index], account_sid.as_ptr()),
+            |index| {
+                let target = &targets[index];
+                let account = edit_acl(target, account_sid.as_ptr(), REVOKE_ACCESS, 0);
+                let capability = edit_acl(target, cap.as_ptr(), REVOKE_ACCESS, 0);
+                account.and(capability)
+            },
+        )
+        .map_err(|failure| {
+            anyhow::anyhow!(
+                "policy admission failed: phase={:?}; target={}; {}; rollback_failed={}",
+                failure.phase,
+                failure.index,
+                failure.error,
+                failure.rollback_failed
+            )
+        })?;
         Ok(Self {
             request,
             targets,
