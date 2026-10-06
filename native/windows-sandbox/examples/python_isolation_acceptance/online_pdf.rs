@@ -85,7 +85,7 @@ impl Relay {
         let argv = [lab::PYTHON.to_owned(), "-I".into(), "-S".into(), "-B".into(), RELAY_SCRIPT.into()];
         let mut command = winutil::to_wide(&winutil::argv_to_command_line(&argv));
         let app = winutil::to_wide(lab::PYTHON);
-        let cwd = winutil::to_wide(&path("trusted").to_string_lossy());
+        let cwd = winutil::to_wide(path("trusted"));
         // Explicit replacement environment: no proxy, PATH, PYTHON*, credentials,
         // pip settings or inherited configuration. Unicode double-NUL terminator.
         let mut environment: Vec<u16> = [r"SystemRoot=C:\Windows", r"WINDIR=C:\Windows"].iter()
