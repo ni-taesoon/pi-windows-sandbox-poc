@@ -1,5 +1,6 @@
 """Pure online-PDF fixture mocks. Never import wheels, invoke pip or open sockets."""
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -57,10 +58,41 @@ class OnlineFixtureTests(unittest.TestCase):
                 patch.object(fixture.os, 'devnull', 'nul'):
             fixture.sanitize_environment()
             # Windows os.environ normalizes keys to uppercase; preserve the exact allowlist.
-            self.assertEqual({key.upper() for key in os.environ}, {'SYSTEMROOT','WINDIR','TEMP','TMP','PIP_CONFIG_FILE'})
-            self.assertEqual(len(os.environ), 5)
+            appdirs = {'USERPROFILE','APPDATA','LOCALAPPDATA','WIN_PD_OVERRIDE_LOCAL_APPDATA',
+                       'WIN_PD_OVERRIDE_APPDATA','WIN_PD_OVERRIDE_COMMON_APPDATA'}
+            self.assertEqual({key.upper() for key in os.environ},
+                             {'SYSTEMROOT','WINDIR','TEMP','TMP','PIP_CONFIG_FILE'} | appdirs)
+            self.assertEqual(len(os.environ), 11)
+            for name in appdirs:
+                self.assertEqual(os.environ[name],str(fixture.WORK))
             self.assertEqual(os.environ['PIP_CONFIG_FILE'], 'nul')
             self.assertEqual(os.environ['TEMP'], str(fixture.WORK))
+
+    @unittest.skipUnless(os.name == 'nt', 'exact Windows pip known-folder regression runs in pre-security CI')
+    def test_observed_pip_known_folder_resolver_uses_only_work_overrides(self):
+        # Read the existing runtime module, not a fetched or newly installed wheel.
+        # Exact official pip 26.2.1 bytes match the failed VM inventory.
+        module = importlib.import_module('pip._vendor.platformdirs.windows')
+        source = Path(module.__file__).read_bytes()
+        self.assertEqual(hashlib.sha256(source).hexdigest(),
+                         '60e75218d85da719bfc9d66aeee1bbe22f665f6fd659b70c480e1fa1b5f02f43')
+        with patch.dict(os.environ, {}, clear=True), \
+                patch.object(module, '_resolve_win_folder', side_effect=OSError(22, 'SYNTHETIC_KNOWN_FOLDER_UNAVAILABLE')) as resolve:
+            with self.assertRaises(OSError):
+                module.get_win_folder('CSIDL_LOCAL_APPDATA')
+            resolve.assert_called_once_with('CSIDL_LOCAL_APPDATA')
+            resolve.reset_mock()
+            fixture.sanitize_environment()
+            for csidl in ['CSIDL_LOCAL_APPDATA','CSIDL_APPDATA','CSIDL_COMMON_APPDATA']:
+                self.assertEqual(module.get_win_folder(csidl),str(fixture.WORK))
+            paths = module.Windows('pip',appauthor=False,roaming=True)
+            self.assertEqual(paths.user_cache_dir,str(fixture.WORK/'pip'/'Cache'))
+            self.assertEqual(paths.user_config_dir,str(fixture.WORK/'pip'))
+            self.assertEqual(paths.site_config_dir,str(fixture.WORK/'pip'))
+            resolve.assert_not_called()
+            with self.assertRaises(OSError):
+                module.get_win_folder('CSIDL_PERSONAL')
+            resolve.assert_called_once_with('CSIDL_PERSONAL')
 
     def test_exact_three_live_relay_receipts_required(self):
         self.assertTrue(self.verify_report(self.report()))
