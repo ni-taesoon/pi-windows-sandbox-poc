@@ -156,7 +156,8 @@ class PythonIsolationWorkflowContracts(unittest.TestCase):
         self.assertEqual(source.count('-Phase Setup -ApprovedDisposableVm'), 1)
         self.assertEqual(source.count('-Phase Run -ApprovedDisposableVm'), 1)
         self.assertEqual(source.count('-Phase Disable -ApprovedDisposableVm'), 1)
-        self.assertNotIn('continue-on-error', source)
+        self.assertEqual(source.count('continue-on-error: true'), 1)
+        self.assertIn('continue-on-error: true', self.firewall_observation())
         self.assertNotIn('retry', self.actions.lower().replace('no automatic in-job retry', '').replace('no retry', ''))
         self.assertIn('NOT_TESTED', source)
         self.assertIn('Production activation stays false', source)
@@ -174,13 +175,95 @@ class PythonIsolationWorkflowContracts(unittest.TestCase):
         self.assertEqual(len(uploaded), len(set(uploaded)))
         for path in uploaded:
             self.assertRegex(path, r'\Apython-isolation-evidence/[a-z-]+\.(json|log)\Z')
-            self.assertNotIn('store', path)
+            if path != 'python-isolation-evidence/python-isolation-firewall-active-store.json':
+                self.assertNotIn('store', path)
             self.assertNotIn('credential', path)
         self.assertIn('include-hidden-files: false', source)
         self.assertIn('retention-days: 7', source)
         self.assertIn("Assert-LabSourceAncestors -Path $source -Role 'isolation-evidence'", source)
         self.assertIn('.Length -gt 8388608', source)
         self.assertNotIn('**', upload_section)
+
+    def firewall_observation(self):
+        return self.workflow.split('      - name: Observe only five owned ActiveStore rules', 1)[1].split(
+            '      - name: Run fixed ordinary control', 1)[0]
+
+    def test_optional_firewall_metadata_cannot_replace_or_gate_runtime(self):
+        source = self.workflow
+        observation = self.firewall_observation()
+        self.assertLess(source.index('id: setup'), source.index('id: firewall_observation'))
+        self.assertLess(source.index('id: firewall_observation'), source.index('id: run'))
+        self.assertIn("if: ${{ steps.setup.outcome == 'success' }}", observation)
+        self.assertIn('continue-on-error: true', observation)
+        self.assertIn('timeout-minutes: 2', observation)
+        self.assertIn('exit 0', observation)
+        self.assertIn('provesConnectionBlocking=$false', observation)
+        self.assertIn('liveConnectionObservationsAuthoritative=$true', observation)
+        self.assertIn("observation='INCONCLUSIVE'", observation)
+        for reason in ['MISSING_RULE', 'DUPLICATE_RULE', 'QUERY_OR_PROPERTY_UNAVAILABLE']:
+            self.assertIn(reason, observation)
+        run = source.split('        id: run', 1)[1].split('      - name:', 1)[0]
+        self.assertNotIn('firewall_observation', run)
+        self.assertIn('-Phase Run -ApprovedDisposableVm', run)
+
+    def test_firewall_metadata_reads_exact_five_names_and_associated_filters_only(self):
+        observation = self.firewall_observation()
+        specs = observation.split('$specifications = @(', 1)[1].split('          )', 1)[0]
+        self.assertEqual(re.findall(r"name='([^']+)'", specs), [
+            'pi_sandbox_offline_block_outbound', 'pi_sandbox_offline_block_inbound',
+            'pi_sandbox_offline_block_loopback_tcp', 'pi_sandbox_offline_block_loopback_udp',
+            'pi_sandbox_offline_block_loopback_inbound',
+        ])
+        self.assertEqual(observation.count('Get-NetFirewallRule '), 1)
+        self.assertIn('Get-NetFirewallRule -PolicyStore ActiveStore -Name $spec.name -ErrorAction Stop', observation)
+        for filter_name in ['Address', 'Port', 'Security']:
+            self.assertIn(f'Get-NetFirewall{filter_name}Filter -AssociatedNetFirewallRule $rule -ErrorAction Stop', observation)
+        for forbidden in ['Set-NetFirewall', 'New-NetFirewall', 'Remove-NetFirewall',
+                          'Enable-NetFirewall', 'Disable-NetFirewall', 'netsh ', 'auditpol ',
+                          'pktmon ', 'netsh.exe', 'Get-NetFirewallProfile', 'Get-LocalUser',
+                          'Get-NetFirewallRule -All', 'Get-NetFirewallRule -DisplayName']:
+            self.assertNotIn(forbidden, observation)
+        self.assertIn('$rules.Count -ne 1', observation)
+        self.assertIn('$address.Count -ne 1', observation)
+        self.assertIn('$port.Count -ne 1', observation)
+        self.assertIn('$security.Count -ne 1', observation)
+
+    def test_firewall_metadata_serializes_only_normalized_status_and_scope_facts(self):
+        observation = self.firewall_observation()
+        observed = observation.split("name=$spec.name; observation='OBSERVED'", 1)[1].split('              }', 1)[0]
+        for field in ['enforcementStatus=$enforcement', 'primaryStatus=(Safe-Enum',
+                      'action=$action', 'direction=$direction', 'enabled=$enabled',
+                      'profile=$profile', 'protocol=$protocol', 'expectedMatches=$matches']:
+            self.assertIn(field, observed)
+        for field in ['localAddressAny=', 'remoteAddressScope=', 'localPortAny=',
+                      'remotePortAny=', 'localUserScope=', 'remoteUserAny=', 'remoteMachineAny=']:
+            self.assertIn(field, observation)
+        self.assertIn('User-Scope-Matches $security[0].LocalUser $accountSid', observation)
+        self.assertIn('$descriptor.DiscretionaryAcl.Count -ne 1', observation)
+        self.assertIn('$ace.AccessMask -eq 1', observation)
+        self.assertIn('$ace.SecurityIdentifier.Value -ceq $Sid', observation)
+        for forbidden in ['accountSid=$accountSid', 'localUser=$', 'SDDL=', '$_.Exception',
+                          '$_.ToString', '$rule | ConvertTo-Json', '$security | ConvertTo-Json',
+                          'Format-List', 'Format-Table', 'Write-Error', 'Write-Warning']:
+            self.assertNotIn(forbidden, observation)
+        self.assertIn("return 'UNKNOWN'", observation)
+        self.assertIn("'LocalUserEmpty'", observation)
+        self.assertIn("'LocalFirewallRulesDisallowed'", observation)
+        self.assertIn("$entry.reason='BASELINE_IDENTITY_UNAVAILABLE'", observation)
+        self.assertIn('[Net.IPAddress]::Parse', observation)
+        self.assertNotIn('GetHost', observation)
+        self.assertNotIn('TcpClient', observation)
+        self.assertNotIn('socket', executable_lines(observation))
+
+    def test_firewall_metadata_has_one_exact_artifact_destination(self):
+        observation = self.firewall_observation()
+        artifact = 'python-isolation-evidence/python-isolation-firewall-active-store.json'
+        self.assertIn('Set-Content -LiteralPath ' + artifact, observation)
+        upload = self.workflow.split('          path: |', 1)[1]
+        self.assertEqual(upload.count(artifact), 1)
+        self.assertEqual(self.workflow.count(artifact), 2)
+        self.assertNotIn('python-isolation-firewall-active-store.json',
+                         self.workflow.split('foreach ($name in @(', 1)[1].split(')) {', 1)[0])
 
     def test_stager_requires_fresh_elevated_exact_scope(self):
         source = self.stager

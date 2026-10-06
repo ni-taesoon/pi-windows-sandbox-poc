@@ -295,7 +295,7 @@
       "destination": "native/windows-sandbox/src/python_isolation.rs",
       "upstream": [],
       "origin": "new default-off fixed Python acceptance laboratory source",
-      "adapted_sha256": "b6e378fc2852a23f61ca6acf6e14a540efd9fde0ddce0728b2afcd52272f833e"
+      "adapted_sha256": "e8a07f228fafe410f3604edee739f419a068bdbb6baa3d05e8e808aab8dfebf7"
     },
     {
       "destination": "native/windows-sandbox/src/python_isolation/broker.rs",
@@ -307,7 +307,7 @@
       "destination": "native/windows-sandbox/src/python_isolation/observer.rs",
       "upstream": [],
       "origin": "new default-off fixed Python acceptance laboratory source",
-      "adapted_sha256": "12a3bb2ed2f940a0b493255d9a23abbe09c15a968f15b0f9e3de56dc050f2bf8"
+      "adapted_sha256": "32055ebfeb42f0fd52ffc37ace5cde91de2fe6b1e9738b296e6b25320236fbb5"
     }
   ]
 }

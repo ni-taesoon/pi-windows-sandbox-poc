@@ -3,10 +3,10 @@ use pi_windows_sandbox::{python_isolation::*, protocol::{RunResult,StopReason}};
 use base64::Engine;
 fn frame(case: Case) -> Frame {
     let s = ScriptEvidence { schema_version:1, mode:case, python:[3,12,10], marker:"PYTHON_ISOLATION_OK".into(),
-        outside_read:Some(Probe::Success),outside_write:Some(Probe::PermissionDenied { winerror:5 }),
-        input_ok:Some(true),output_ok:Some(true),denied_read:Some(Probe::PermissionDenied { winerror:5 }),
-        denied_write:Some(Probe::PermissionDenied { winerror:5 }),tcp4:Some(Probe::PermissionDenied { winerror:10013 }),
-        tcp6:Some(Probe::PermissionDenied { winerror:10013 }) };
+        outside_read:Some(Probe::Success),outside_write:Some(Probe::PermissionDenied { winerror:Some(5), errno:None, error_type:None }),
+        input_ok:Some(true),output_ok:Some(true),denied_read:Some(Probe::PermissionDenied { winerror:Some(5), errno:None, error_type:None }),
+        denied_write:Some(Probe::PermissionDenied { winerror:Some(5), errno:None, error_type:None }),tcp4:Some(Probe::PermissionDenied { winerror:Some(10013), errno:None, error_type:None }),
+        tcp6:Some(Probe::PermissionDenied { winerror:Some(10013), errno:None, error_type:None }) };
     let mut f = Frame { case, account_sid:"S-1-5-21-1-2-3-1001".into(),capability_sid:"S-1-5-21-4-5-6-7".into(),
         private_desktop:"Winsta0\\PiSandboxDesktop-0123456789abcdef0123456789abcdef".into(),
         run:Some(RunResult {kind:"result".into(),exit_code:0,stdout_base64:String::new(),stderr_base64:String::new(),
@@ -52,11 +52,11 @@ fn set_script(f: &mut Frame,s: &ScriptEvidence) { f.run.as_mut().unwrap().stdout
 }
 #[test] fn refused_timeout_and_missing_controls_are_inconclusive() {
     for code in [10061,10060,12345] {
-        let mut f=frame(Case::PinnedBoundary);let mut s=parse_script(&f).unwrap();s.tcp4=Some(Probe::Inconclusive { winerror:Some(code) });set_script(&mut f,&s);
+        let mut f=frame(Case::PinnedBoundary);let mut s=parse_script(&f).unwrap();s.tcp4=Some(Probe::Inconclusive { winerror:Some(code),errno:None,error_type:None });set_script(&mut f,&s);
         assert_eq!(assess(&f,true,true,true).loopback_only,Verdict::Inconclusive);
     }
     let f=frame(Case::PinnedBoundary);assert_eq!(assess(&f,true,true,false).loopback_only,Verdict::Inconclusive);
-    assert!(!(Probe::PermissionDenied {winerror:10061}).explicit_denial());
+    assert!(!(Probe::PermissionDenied { winerror:Some(10061), errno:None, error_type:None }).explicit_denial());
 }
 #[test] fn explicit_deny_success_is_failure() {
     let mut f=frame(Case::PinnedBoundary);let mut s=parse_script(&f).unwrap();s.denied_read=Some(Probe::Success);set_script(&mut f,&s);
@@ -97,4 +97,63 @@ fn set_script(f: &mut Frame,s: &ScriptEvidence) { f.run.as_mut().unwrap().stdout
     f.native.unobserved_handles_signaled=true;f.native.root=None;
     // Fast loader failure can lack complete identity, but cannot contradict cleanup.
     assert!(f.cleanup_verified());assert!(!native_valid(&f));
+}
+#[test] fn diagnostics_preserve_root_errors_when_descendant_observation_fails() {
+    let mut d=NativeDiagnostics::default();d.expected_root_pid=100;d.expected_root_thread_id=101;
+    d.root_error("api=GetThreadDesktop(identity); win32=5".into());
+    d.root_error("process identity/liveness unavailable".into());
+    d.descendant_error("unexpected process tree expansion".into());
+    assert_eq!(d.root_first_error.as_deref(),Some("api=GetThreadDesktop(identity); win32=5"));
+    assert_eq!(d.root_last_error.as_deref(),Some("process identity/liveness unavailable"));
+    assert_eq!(d.descendant_first_error.as_deref(),Some("unexpected process tree expansion"));
+    let serialized=serde_json::to_value(d).unwrap();assert_eq!(serialized["expectedRootPid"],100);
+}
+#[test] fn diagnostic_snapshots_members_and_strings_are_bounded() {
+    let mut d=NativeDiagnostics::default();
+    for pid in 0..32 {
+        d.snapshot(JobPidSnapshot {assigned:3,returned:3,pids:vec![pid,pid+100,pid+200],query_error:None});
+        d.member(JobMemberEvidence {pid,image:Some("x".repeat(2048)),query_error:None});
+    }
+    d.root_error("x".repeat(4096));
+    assert_eq!(d.job_pid_snapshots.len(),8);assert_eq!(d.job_members.len(),8);assert!(d.truncated);
+    assert_eq!(d.job_pid_snapshots[0].pids,vec![0,100,200]);
+    assert!(d.root_first_error.unwrap().len()<=512);
+    assert!(d.job_members.iter().all(|m|m.image.is_none()));
+}
+#[test] fn errno_only_permission_requires_exact_explicit_evidence() {
+    for errno in [1,13] {
+        let p=Probe::PermissionDenied {winerror:None,errno:Some(errno),error_type:Some("PermissionError".into())};
+        assert!(p.file_denial());assert!(p.socket_denial());
+        let mut f=frame(Case::PinnedBoundary);let mut s=parse_script(&f).unwrap();s.denied_read=Some(p);set_script(&mut f,&s);
+        assert_eq!(assess(&f,true,true,true).explicit_denies,Verdict::ObservedPass);
+    }
+    for (winerror,errno,kind) in [(None,None,Some("PermissionError")),(None,Some(13),None),
+        (None,Some(13),Some("OSError")),(Some(10061),Some(13),Some("PermissionError")),
+        (None,Some(2),Some("FileNotFoundError"))] {
+        let p=Probe::PermissionDenied {winerror,errno,error_type:kind.map(str::to_owned)};
+        assert!(!p.explicit_denial());
+    }
+    let old:Probe=serde_json::from_str(r#"{"outcome":"INCONCLUSIVE","winerror":null}"#).unwrap();
+    assert!(!old.explicit_denial());
+}
+#[test] fn dacl_telemetry_is_fixed_bounded_and_read_only() {
+    let driver=include_str!("../examples/python_isolation_acceptance/windows.rs");
+    let telemetry=driver.split("// This telemetry is read-only").nth(1).unwrap().split("fn pin_file(").next().unwrap();
+    for target in ["WORK_ROOT","DENIED_WRITE_DIR","DENIED_READ_DIR","DENIED_READ_FILE","OUTSIDE_WORLD_DIR"] {
+        assert!(telemetry.contains(target));
+    }
+    for forbidden in ["SetSecurityInfo(","SetNamedSecurityInfo","ConvertSidToStringSid","string_from_sid_bytes","to_sddl"] {
+        assert!(!telemetry.contains(forbidden));
+    }
+    assert!(telemetry.contains("AceCount > 64"));assert!(telemetry.contains("FILE_FLAG_OPEN_REPARSE_POINT"));
+    assert!(telemetry.contains("trusteeRole"));assert!(telemetry.contains("fileDeleteChild"));
+    assert!(driver.contains("fixed_target_dacls(owner,identity.sid(),None)"));
+    assert!(driver.contains("fixed_target_dacls(owner,&frame.account_sid,Some(&frame.capability_sid))"));
+}
+#[test] fn job_diagnostics_precede_unchanged_cardinality_rejection() {
+    let observer=include_str!("../src/python_isolation/observer.rs");
+    assert!(observer.find("diagnostics.snapshot(").unwrap()<observer.find("pids.assigned <= 2 && pids.count <= 2").unwrap());
+    assert!(observer.contains("PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE"));
+    assert!(!observer.contains("PROCESS_ALL_ACCESS"));assert!(!observer.contains("PROCESS_VM_READ"));
+    assert!(!observer.contains("descendant_error.take().or_else"));
 }

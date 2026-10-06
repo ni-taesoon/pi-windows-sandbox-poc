@@ -76,7 +76,7 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $actual -cne $env:SOURCE_SHA) { throw 'Source identity mismatch.' }
           New-Item -ItemType Directory -Path python-isolation-evidence | Out-Null
           [ordered]@{
-            sourceCommit=$actual; baselineCommit='1ae5bac53c06b6262d01be99b0697a6eb84ca125';
+            sourceCommit=$actual; baselineCommit='0dbeb9a533a4e26d3558f760b8e5e9f4f3027855';
             scope='LAB_PYTHON_ISOLATION_ACCEPTANCE'; nativeValidated=$false
           } | ConvertTo-Json | Set-Content -LiteralPath python-isolation-evidence/source-identity.json -Encoding UTF8
       - name: Verify frozen source manifest and closed production gate
@@ -190,6 +190,144 @@ jobs:
         id: setup
         run: |
           ./scripts/stage_windows_python_isolation.ps1 -Phase Setup -ApprovedDisposableVm 2>&1 | Tee-Object -FilePath python-isolation-evidence/setup.log
+      - name: Observe only five owned ActiveStore rules without changing policy
+        id: firewall_observation
+        if: ${{ steps.setup.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 2
+        run: |
+          # Optional metadata only. No audit/capture, policy changes, broad rule
+          # enumeration, account-name lookup, raw identities or raw error output.
+          $ErrorActionPreference = 'Stop'
+          $WarningPreference = 'SilentlyContinue'
+          $InformationPreference = 'SilentlyContinue'
+          $VerbosePreference = 'SilentlyContinue'
+          $DebugPreference = 'SilentlyContinue'
+          $ProgressPreference = 'SilentlyContinue'
+          function Safe-Enum($Value, [string[]]$Allowed) {
+            $text = [string]$Value
+            if ($Allowed -ccontains $text) { return $text }
+            return 'UNKNOWN'
+          }
+          function Is-Any($Value) {
+            $values = @($Value)
+            return $values.Count -eq 1 -and [string]$values[0] -in @('Any', '*')
+          }
+          function Address-Key([string]$Value) {
+            # Numeric parsing only: no DNS, sockets, or address resolution.
+            if ($Value.Length -gt 128 -or $Value.Contains('%')) { throw 'ADDRESS_SHAPE' }
+            $parts = $Value.Trim().Split('/')
+            if ($parts.Count -eq 2) {
+              $address = [Net.IPAddress]::Parse($parts[0])
+              $low = $address.GetAddressBytes(); $high = $address.GetAddressBytes()
+              if ($parts[1].Contains('.')) {
+                $maskBytes = ([Net.IPAddress]::Parse($parts[1])).GetAddressBytes()
+                if ($low.Length -ne 4 -or $maskBytes.Length -ne 4) { throw 'ADDRESS_MASK' }
+                $maskBits = -join @($maskBytes | ForEach-Object { [Convert]::ToString($_, 2).PadLeft(8, '0') })
+                if ($maskBits -cnotmatch '\A1*0*\z') { throw 'ADDRESS_MASK' }
+                $bits = $maskBits.TrimEnd('0').Length
+              } else { $bits = [int]$parts[1] }
+              if ($bits -lt 0 -or $bits -gt ($low.Length * 8)) { throw 'ADDRESS_SHAPE' }
+              for ($i = 0; $i -lt $low.Length; $i++) {
+                $remaining = [Math]::Max(0, [Math]::Min(8, $bits - (8 * $i)))
+                $mask = (255 -shl (8 - $remaining)) -band 255
+                $low[$i] = $low[$i] -band $mask
+                $high[$i] = $low[$i] -bor (255 -bxor $mask)
+              }
+            } elseif ($parts.Count -eq 1) {
+              $range = $Value.Trim().Split('-')
+              if ($range.Count -gt 2) { throw 'ADDRESS_SHAPE' }
+              $low = ([Net.IPAddress]::Parse($range[0])).GetAddressBytes()
+              $high = ([Net.IPAddress]::Parse($range[-1])).GetAddressBytes()
+              if ($low.Length -ne $high.Length) { throw 'ADDRESS_SHAPE' }
+            } else { throw 'ADDRESS_SHAPE' }
+            return ([Convert]::ToHexString($low) + '-' + [Convert]::ToHexString($high))
+          }
+          function Address-Set($Values) {
+            $parts = @($Values | ForEach-Object { ([string]$_).Split(',') })
+            if ($parts.Count -lt 1 -or $parts.Count -gt 16) { throw 'ADDRESS_COUNT' }
+            return (@($parts | ForEach-Object { Address-Key $_ } | Sort-Object -Unique) -join ',')
+          }
+          function User-Scope-Matches($Value, [string]$Sid) {
+            if (-not $Sid -or ([string]$Value).Length -gt 4096) { return $false }
+            $descriptor = [Security.AccessControl.RawSecurityDescriptor]::new([string]$Value)
+            if ($null -eq $descriptor.DiscretionaryAcl -or $descriptor.DiscretionaryAcl.Count -ne 1) { return $false }
+            $ace = $descriptor.DiscretionaryAcl[0]
+            return $ace -is [Security.AccessControl.CommonAce] -and -not $ace.IsCallback -and
+              $ace.AceQualifier -eq [Security.AccessControl.AceQualifier]::AccessAllowed -and
+              $ace.AceFlags -eq [Security.AccessControl.AceFlags]::None -and
+              $ace.AccessMask -eq 1 -and $ace.SecurityIdentifier.Value -ceq $Sid
+          }
+          $specifications = @(
+            @{ name='pi_sandbox_offline_block_outbound'; direction='Outbound'; protocol='Any'; addresses='0.0.0.0-126.255.255.255,128.0.0.0-255.255.255.255,::,::2-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff' },
+            @{ name='pi_sandbox_offline_block_inbound'; direction='Inbound'; protocol='Any'; addresses='0.0.0.0-126.255.255.255,128.0.0.0-255.255.255.255,::,::2-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff' },
+            @{ name='pi_sandbox_offline_block_loopback_tcp'; direction='Outbound'; protocol='TCP'; addresses='127.0.0.0/8,::/127' },
+            @{ name='pi_sandbox_offline_block_loopback_udp'; direction='Outbound'; protocol='UDP'; addresses='127.0.0.0/8,::/127' },
+            @{ name='pi_sandbox_offline_block_loopback_inbound'; direction='Inbound'; protocol='Any'; addresses='127.0.0.0/8,::/127' }
+          )
+          $entries = [Collections.Generic.List[object]]::new()
+          $accountSid = $null
+          try {
+            . ./scripts/windows_lab_stage_sources.ps1
+            $baselinePath = 'C:\PiSandboxLab\trusted\python-isolation-baseline.json'
+            Assert-LabSourceAncestors -Path $baselinePath -Role 'optional-firewall-baseline'
+            if ((Get-Item -LiteralPath $baselinePath).Length -gt 8388608) { throw 'BASELINE_BOUND' }
+            $candidate = (Get-Content -LiteralPath $baselinePath -Raw | ConvertFrom-Json).accountSid
+            if ($candidate -cnotmatch '\AS-1-5-21-[0-9]+-[0-9]+-[0-9]+-[0-9]+\z' -or $candidate.Length -gt 184) { throw 'BASELINE_IDENTITY' }
+            $accountSid = ([Security.Principal.SecurityIdentifier]::new($candidate)).Value
+          } catch { $accountSid = $null }
+          foreach ($spec in $specifications) {
+            $entry = [ordered]@{ name=$spec.name; observation='INCONCLUSIVE'; reason='QUERY_OR_PROPERTY_UNAVAILABLE' }
+            try {
+              $rules = @(Get-NetFirewallRule -PolicyStore ActiveStore -Name $spec.name -ErrorAction Stop)
+              if ($rules.Count -eq 0) { $entry.reason='MISSING_RULE' }
+              elseif ($rules.Count -ne 1) { $entry.reason='DUPLICATE_RULE' }
+              elseif ($rules[0].Name -cne $spec.name) { $entry.reason='NAME_MISMATCH' }
+              else {
+                $rule = $rules[0]
+                $address = @(Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop)
+                $port = @(Get-NetFirewallPortFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop)
+                $security = @(Get-NetFirewallSecurityFilter -AssociatedNetFirewallRule $rule -ErrorAction Stop)
+                if ($address.Count -ne 1 -or $port.Count -ne 1 -or $security.Count -ne 1) { throw 'FILTER_CARDINALITY' }
+                $enforcement = @($rule.EnforcementStatus | ForEach-Object { Safe-Enum $_ @('Full', 'NotApplicable', 'FirewallOffInProfile', 'CategoryOff', 'DisabledObject', 'InactiveProfile', 'LocalAddressResolutionEmpty', 'RemoteAddressResolutionEmpty', 'LocalPortResolutionEmpty', 'RemotePortResolutionEmpty', 'InterfaceResolutionEmpty', 'ApplicationResolutionEmpty', 'RemoteMachineEmpty', 'RemoteUserEmpty', 'LocalGlobalOpenPortsDisallowed', 'LocalAuthorizedApplicationsDisallowed', 'LocalFirewallRulesDisallowed', 'LocalConsecRulesDisallowed', 'NotTargetPlatform', 'OptimizedOut', 'LocalUserEmpty', 'TransportMachinesEmpty', 'TunnelMachinesEmpty') })
+                if ($enforcement.Count -lt 1 -or $enforcement.Count -gt 8) { $enforcement=@('UNKNOWN') }
+                $action = Safe-Enum $rule.Action @('Block', 'Allow', 'NotConfigured')
+                $direction = Safe-Enum $rule.Direction @('Inbound', 'Outbound')
+                $enabled = Safe-Enum $rule.Enabled @('True', 'False')
+                $protocol = Safe-Enum $port[0].Protocol @('Any', 'TCP', 'UDP')
+                $profileParts = @(([string]$rule.Profile).Split(',') | ForEach-Object { $_.Trim() } | Sort-Object -Unique)
+                $profile = if ($profileParts.Count -eq 1 -and $profileParts[0] -ceq 'Any') { 'ANY' }
+                  elseif (($profileParts -join ',') -ceq 'Domain,Private,Public') { 'ALL_THREE' } else { 'OTHER_OR_UNKNOWN' }
+                $matches = [ordered]@{
+                  action=($action -ceq 'Block'); direction=($direction -ceq $spec.direction); enabled=($enabled -ceq 'True');
+                  profile=($profile -in @('ANY', 'ALL_THREE')); protocol=($protocol -ceq $spec.protocol);
+                  localAddressAny=(Is-Any $address[0].LocalAddress);
+                  remoteAddressScope=((Address-Set $address[0].RemoteAddress) -ceq (Address-Set $spec.addresses));
+                  localPortAny=(Is-Any $port[0].LocalPort); remotePortAny=(Is-Any $port[0].RemotePort);
+                  localUserScope=(User-Scope-Matches $security[0].LocalUser $accountSid);
+                  remoteUserAny=(Is-Any $security[0].RemoteUser); remoteMachineAny=(Is-Any $security[0].RemoteMachine)
+                }
+                $entry = [ordered]@{
+                  name=$spec.name; observation='OBSERVED'; reason='NONE';
+                  enforcementStatus=$enforcement; primaryStatus=(Safe-Enum $rule.PrimaryStatus @('OK', 'Degraded', 'Error', 'Unknown'));
+                  action=$action; direction=$direction; enabled=$enabled; profile=$profile; protocol=$protocol;
+                  baselineIdentityAvailable=([bool]$accountSid); expectedMatches=$matches;
+                  allExpectedMatches=(@($matches.Values | Where-Object { $_ -ne $true }).Count -eq 0)
+                }
+                if (-not $accountSid) { $entry.observation='INCONCLUSIVE'; $entry.reason='BASELINE_IDENTITY_UNAVAILABLE' }
+              }
+            } catch { $entry = [ordered]@{ name=$spec.name; observation='INCONCLUSIVE'; reason='QUERY_OR_PROPERTY_UNAVAILABLE' } }
+            $entries.Add([pscustomobject]$entry)
+          }
+          try {
+            [ordered]@{
+              schemaVersion=1; sourceCommit=$env:GITHUB_SHA; policyStore='ActiveStore'; optional=$true;
+              observationOnly=$true; provesConnectionBlocking=$false; liveConnectionObservationsAuthoritative=$true;
+              status=$(if (@($entries | Where-Object { $_.observation -cne 'OBSERVED' }).Count -eq 0) { 'OBSERVED' } else { 'INCONCLUSIVE' });
+              entries=$entries.ToArray()
+            } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath python-isolation-evidence/python-isolation-firewall-active-store.json -Encoding UTF8
+          } catch { Write-Output 'Optional ActiveStore metadata unavailable; fixed runtime observations remain required.' }
+          exit 0
       - name: Run fixed ordinary control and separate strict and pinned canaries once
         id: run
         run: |
@@ -262,3 +400,4 @@ jobs:
             python-isolation-evidence/python-isolation-run.json
             python-isolation-evidence/python-isolation-recovery.json
             python-isolation-evidence/python-isolation-summary.json
+            python-isolation-evidence/python-isolation-firewall-active-store.json
