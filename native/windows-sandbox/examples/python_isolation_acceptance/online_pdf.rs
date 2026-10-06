@@ -2,10 +2,12 @@
 //! Nothing in this file grants the sandbox network access or executes artifact bytes.
 use super::*;
 use pi_windows_sandbox::process::Job;
-use std::{sync::{mpsc, Arc}, thread::JoinHandle, time::{SystemTime, UNIX_EPOCH}};
+use std::{cell::RefCell, sync::{mpsc, Arc}, thread::JoinHandle, time::{SystemTime, UNIX_EPOCH}};
 use windows_sys::Win32::System::Threading::{CreateProcessW, OpenProcessToken, ResumeThread,
     TerminateProcess, WaitForSingleObject, CREATE_NO_WINDOW, CREATE_SUSPENDED,
-    CREATE_UNICODE_ENVIRONMENT, PROCESS_INFORMATION, STARTUPINFOW};
+    CREATE_UNICODE_ENVIRONMENT, PROCESS_INFORMATION, STARTUPINFOW, GetProcessId,
+    OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION};
+use windows_sys::Win32::System::JobObjects::{IsProcessInJob, QueryInformationJobObject, JobObjectBasicProcessIdList};
 
 const RELAY_SCRIPT: &str = r"C:\PiSandboxLab\trusted\python-online-pdf-relay.py";
 const READY: &str = r"trusted\python-online-pdf-relay-ready.json";
@@ -61,18 +63,113 @@ fn exact_keys(value: &serde_json::Value, expected: &[&str]) -> bool {
         && expected.iter().all(|key| object.contains_key(*key)))
 }
 
+
+const RELAY_OBSERVATION_LIMIT: usize = 8;
+#[derive(Debug,Clone,Copy,PartialEq,Eq)]
+enum RelayImageRole { FixedPython, SystemConsoleHost, Other }
+fn relay_image_role(image:&str)->RelayImageRole {
+    if image.eq_ignore_ascii_case(lab::PYTHON) {RelayImageRole::FixedPython}
+    else if image.eq_ignore_ascii_case(lab::CONHOST) {RelayImageRole::SystemConsoleHost}
+    else {RelayImageRole::Other}
+}
+fn relay_member_allowed(root:bool,role:RelayImageRole,same_owner:bool,exact_job:bool)->bool {
+    same_owner && exact_job && if root {role==RelayImageRole::FixedPython}
+        else {role==RelayImageRole::SystemConsoleHost}
+}
+fn relay_snapshot_valid(assigned:u32,returned:u32,pids:&[u32],root:u32)->bool {
+    assigned==returned && (1..=2).contains(&returned) && pids.len()==returned as usize
+        && root!=0 && pids.iter().all(|pid|*pid!=0)
+        && pids.iter().filter(|pid|**pid==root).count()==1
+        && (pids.len()!=2 || pids[0]!=pids[1])
+}
+struct RetainedRelayMember {pid:u32,handle:Handle,console_host:bool,evidence:serde_json::Value}
+#[derive(Default)]
+struct RelayObservations {
+    root:serde_json::Value,initial_root:serde_json::Value,snapshots:Vec<serde_json::Value>,members:Vec<RetainedRelayMember>,
+    failed_members:Vec<serde_json::Value>,first_error:Option<String>,truncated:bool,
+}
+impl RelayObservations {
+    fn snapshot(&mut self,value:serde_json::Value) {
+        if self.snapshots.last()==Some(&value){return;}
+        if self.snapshots.len()<RELAY_OBSERVATION_LIMIT {self.snapshots.push(value);}else{self.truncated=true;}
+    }
+    fn failure(&mut self,message:&str) {self.first_error.get_or_insert_with(||message.chars().take(256).collect());}
+    fn failed_member(&mut self,value:serde_json::Value) {
+        if self.failed_members.len()<RELAY_OBSERVATION_LIMIT {self.failed_members.push(value);}else{self.truncated=true;}
+    }
+}
+fn relay_query_error(evidence:&mut serde_json::Value,stage:&str,code:Option<u32>)->anyhow::Error {
+    evidence["queryError"]=serde_json::json!({"stage":stage,"winerror":code});
+    anyhow::anyhow!("owner relay member observation failed: stage={stage}; winerror={code:?}")
+}
+// Every handle is either the retained CreateProcess root or was opened from the
+// bounded PID list of this exact owned Job. Unknown image strings and SIDs never
+// leave this function: only a fixed image class and same-owner comparison do.
+fn inspect_relay_member(process:&Handle,pid:u32,job:&Job,owner_sid:&[u8],root:bool)
+    ->(serde_json::Value,Result<RelayImageRole>) {
+    let mut evidence=serde_json::json!({"pid":pid,"role":if root{"OWNER_RELAY"}else{"UNVERIFIED_ADDITIONAL"},
+        "imageClass":"UNAVAILABLE","sameOwner":null,"exactJobMember":null,"live":null,"queryError":null});
+    let result=(||->Result<RelayImageRole>{
+        let actual=unsafe{GetProcessId(process.raw())};
+        if actual==0 {return Err(relay_query_error(&mut evidence,"get-process-id",Some(unsafe{GetLastError()})));}
+        if actual!=pid {return Err(relay_query_error(&mut evidence,"retained-pid-mismatch",None));}
+        let wait=unsafe{WaitForSingleObject(process.raw(),0)};
+        let wait_error=if wait==WAIT_FAILED{Some(unsafe{GetLastError()})}else{None};
+        evidence["live"]=serde_json::json!(wait==WAIT_TIMEOUT);
+        if wait!=WAIT_TIMEOUT {
+            return Err(relay_query_error(&mut evidence,if wait==WAIT_OBJECT_0{"process-exited"}else{"process-wait-query"},
+                wait_error));
+        }
+        let mut member=0;
+        if unsafe{IsProcessInJob(process.raw(),job.raw(),&mut member)}==0 {
+            return Err(relay_query_error(&mut evidence,"exact-job-query",Some(unsafe{GetLastError()})));
+        }
+        evidence["exactJobMember"]=serde_json::json!(member!=0);
+        if member==0{return Err(relay_query_error(&mut evidence,"outside-exact-job",None));}
+        let mut buffer=[0u16;1024];let mut length=buffer.len() as u32;
+        if unsafe{QueryFullProcessImageNameW(process.raw(),0,buffer.as_mut_ptr(),&mut length)}==0 {
+            return Err(relay_query_error(&mut evidence,"process-image-query",Some(unsafe{GetLastError()})));
+        }
+        if length==0 || length as usize>buffer.len() {
+            return Err(relay_query_error(&mut evidence,"process-image-bounds",None));
+        }
+        let image=String::from_utf16(&buffer[..length as usize])
+            .map_err(|_|relay_query_error(&mut evidence,"process-image-encoding",None))?;
+        let role=relay_image_role(&image);
+        evidence["imageClass"]=serde_json::json!(match role{RelayImageRole::FixedPython=>"FIXED_PYTHON",
+            RelayImageRole::SystemConsoleHost=>"SYSTEM32_CONHOST",RelayImageRole::Other=>"OTHER"});
+        let mut raw=0;
+        if unsafe{OpenProcessToken(process.raw(),TOKEN_QUERY,&mut raw)}==0 {
+            return Err(relay_query_error(&mut evidence,"process-token-query",Some(unsafe{GetLastError()})));
+        }
+        let token=unsafe{Handle::from_raw(raw)}?;
+        let actual_sid=unsafe{user_sid_bytes(token.raw())}
+            .map_err(|_|relay_query_error(&mut evidence,"token-owner-query",None))?;
+        let same_owner=actual_sid==owner_sid;
+        evidence["sameOwner"]=serde_json::json!(same_owner);
+        if !relay_member_allowed(root,role,same_owner,member!=0) {
+            return Err(relay_query_error(&mut evidence,if !same_owner{"owner-mismatch"}else{"unexpected-image-class"},None));
+        }
+        evidence["role"]=serde_json::json!(if root{"OWNER_RELAY"}else{"CONSOLE_HOST_INFRASTRUCTURE"});
+        Ok(role)
+    })();
+    (evidence,result)
+}
+
 pub(crate) struct Relay {
     job: Option<Arc<Job>>, process: Option<Handle>, pid: u32, assigned: bool,
     started: Instant, started_unix_ms: u64, ready: serde_json::Value, health: serde_json::Value,
     cancel_watchdog: Option<mpsc::Sender<()>>, watchdog: Option<JoinHandle<Result<bool>>>,
     startup_error: Option<String>, cleanup_receipt: Option<serde_json::Value>,
+    trusted_owner_sid:Vec<u8>,observations:RefCell<RelayObservations>,
 }
 impl Relay {
     pub(crate) fn start() -> Result<Self> {
         for name in [READY, EVENTS, CLEANUP, PDF_VALIDATION] { absent(name)?; }
         let mut relay = Self {job:None,process:None,pid:0,assigned:false,started:Instant::now(),
             started_unix_ms:unix_ms()?,ready:serde_json::Value::Null,health:serde_json::Value::Null,
-            cancel_watchdog:None,watchdog:None,startup_error:None,cleanup_receipt:None};
+            cancel_watchdog:None,watchdog:None,startup_error:None,cleanup_receipt:None,
+            trusted_owner_sid:Vec::new(),observations:RefCell::new(RelayObservations::default())};
         if let Err(error) = relay.launch() {
             relay.startup_error = Some(format!("{error:#}"));
             let cleanup = relay.cleanup();
@@ -110,9 +207,11 @@ impl Relay {
             "relay owner token query failed");
         let token = unsafe { Handle::from_raw(raw_token)? };
         let current = unsafe { Handle::from_raw(token::get_current_token_for_restriction()?)? };
-        ensure!(unsafe { user_sid_bytes(token.raw())? == user_sid_bytes(current.raw())? },
+        self.trusted_owner_sid=unsafe{user_sid_bytes(current.raw())?};
+        ensure!(unsafe { user_sid_bytes(token.raw())? == self.trusted_owner_sid },
             "relay process did not retain current owner SID");
         job.assign_suspended(process)?; self.assigned = true;
+        self.observe_owned_job()?;
         let (send, receive) = mpsc::channel();
         let remaining = MAX_LIFETIME.saturating_sub(self.started.elapsed());
         self.watchdog = Some(std::thread::Builder::new().name("fixed-relay-deadline".into()).spawn(move || {
@@ -174,10 +273,83 @@ impl Relay {
     }
     pub(crate) fn ensure_alive(&self) -> Result<()> {
         ensure!(self.started.elapsed() < MAX_LIFETIME, "owner relay fixed suite deadline exceeded");
-        ensure!(self.assigned && self.process.as_ref().is_some_and(|p|
-            unsafe { WaitForSingleObject(p.raw(), 0) } == WAIT_TIMEOUT), "owner relay exited or liveness unavailable");
-        ensure!(self.job.as_ref().context("owner relay Job absent")?.active_processes()? == 1,
-            "owner relay Job must contain exactly its fixed root");
+        self.observe_owned_job()
+    }
+    fn observe_owned_job(&self)->Result<()> {
+        let result=self.observe_owned_job_inner();
+        if let Err(error)=&result {self.observations.borrow_mut().failure(&format!("{error:#}"));}
+        result
+    }
+    fn observe_owned_job_inner(&self)->Result<()> {
+        ensure!(self.assigned,"owner relay was not assigned to its owned Job");
+        let job=self.job.as_ref().context("owner relay Job absent")?;
+        // Query only this exact owned Job; never enumerate host processes.
+        #[repr(C)] struct BoundedPids {assigned:u32,count:u32,pids:[usize;RELAY_OBSERVATION_LIMIT]}
+        let mut pids:BoundedPids=unsafe{std::mem::zeroed()};
+        let query=unsafe{QueryInformationJobObject(job.raw(),JobObjectBasicProcessIdList,
+            (&mut pids as *mut BoundedPids).cast(),std::mem::size_of::<BoundedPids>() as u32,null_mut())};
+        if query==0 {
+            let code=unsafe{GetLastError()};
+            self.observations.borrow_mut().snapshot(serde_json::json!({"assigned":null,"returned":null,
+                "pids":[],"queryError":{"stage":"exact-job-pid-list","winerror":code}}));
+            anyhow::bail!("owner relay Job PID query failed: winerror={code}");
+        }
+        let observed=pids.pids[..(pids.count as usize).min(RELAY_OBSERVATION_LIMIT)].iter()
+            .filter_map(|pid|u32::try_from(*pid).ok()).collect::<Vec<_>>();
+        {
+            let mut records=self.observations.borrow_mut();
+            records.snapshot(serde_json::json!({"assigned":pids.assigned,"returned":pids.count,
+                "pids":observed,"queryError":null}));
+            if pids.count as usize>RELAY_OBSERVATION_LIMIT || pids.assigned>pids.count {records.truncated=true;}
+        }
+        let root=self.process.as_ref().context("owner relay retained root absent")?;
+        let (root_evidence,root_result)=inspect_relay_member(root,self.pid,job,&self.trusted_owner_sid,true);
+        {
+            let mut records=self.observations.borrow_mut();
+            if records.initial_root.is_null(){records.initial_root=root_evidence.clone();}
+            records.root=root_evidence;
+        }
+        // Observe each available additional member before rejecting an expansion,
+        // so failed startup has useful evidence without exposing unknown paths.
+        let mut additional_error=None;
+        for pid in observed.iter().copied().filter(|pid|*pid!=self.pid) {
+            if pid==0 {additional_error.get_or_insert_with(||anyhow::anyhow!("owner relay Job returned a zero PID"));continue;}
+            if self.observations.borrow().members.iter().any(|member|member.pid==pid){continue;}
+            if self.observations.borrow().members.len()>=RELAY_OBSERVATION_LIMIT {
+                self.observations.borrow_mut().truncated=true;additional_error=Some(anyhow::anyhow!("owner relay retained-member bound exceeded"));break;
+            }
+            let raw=unsafe{OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE,0,pid)};
+            if raw==0 {
+                let code=unsafe{GetLastError()};
+                self.observations.borrow_mut().failed_member(serde_json::json!({"pid":pid,"role":"UNVERIFIED_ADDITIONAL",
+                    "imageClass":"UNAVAILABLE","queryError":{"stage":"open-job-member","winerror":code}}));
+                additional_error.get_or_insert_with(||anyhow::anyhow!("owner relay Job member open failed: winerror={code}"));continue;
+            }
+            let handle=unsafe{Handle::from_raw(raw)}?;
+            let (mut evidence,inspection)=inspect_relay_member(&handle,pid,job,&self.trusted_owner_sid,false);
+            let console_host=inspection.as_ref().is_ok_and(|role|*role==RelayImageRole::SystemConsoleHost);
+            let mut records=self.observations.borrow_mut();
+            if console_host && records.members.iter().any(|member|member.console_host) {
+                evidence["accepted"]=serde_json::json!(false);
+                additional_error.get_or_insert_with(||anyhow::anyhow!("owner relay observed multiple console hosts"));
+            }else{evidence["accepted"]=serde_json::json!(console_host);}
+            if let Err(error)=inspection {additional_error.get_or_insert(error);}
+            records.members.push(RetainedRelayMember{pid,handle,console_host,evidence});
+        }
+        root_result?;
+        if let Some(error)=additional_error{return Err(error);}
+        ensure!(relay_snapshot_valid(pids.assigned,pids.count,&observed,self.pid),
+            "owner relay Job PID count, uniqueness or retained-root presence invalid");
+        let mut records=self.observations.borrow_mut();
+        ensure!(records.members.len()<=1 && records.members.iter().all(|member|member.console_host),
+            "owner relay contains unexpected or multiple additional members");
+        for member in &mut records.members {
+            // Keep and revalidate the same retained handle, never reopen by PID.
+            let (evidence,inspection)=inspect_relay_member(&member.handle,member.pid,job,&self.trusted_owner_sid,false);
+            member.evidence["lastObservation"]=evidence;
+            inspection?;
+            ensure!(observed.contains(&member.pid),"retained owner relay console host missing from exact Job list");
+        }
         Ok(())
     }
     pub(crate) fn cleanup(&mut self) -> serde_json::Value {
@@ -189,6 +361,10 @@ impl Relay {
             Ok(Err(e)) => serde_json::json!({"deadlineExpired":true,"error":format!("{e:#}")}),
             Err(_) => serde_json::json!({"deadlineExpired":null,"error":"relay watchdog panicked"}),
         });
+        // Best-effort final bounded observation precedes termination, including
+        // startup failures. Observation failure does not substitute for cleanup.
+        let final_observation_verified=self.assigned && self.observe_owned_job().is_ok();
+        let owner_job_observation_verified=final_observation_verified && self.observations.borrow().first_error.is_none();
         let mut errors = Vec::<String>::new();
         if let Some(job) = &self.job { if let Err(e) = job.terminate() { errors.push(format!("terminate relay Job: {e:#}")); } }
         if !self.assigned { if let Some(process) = &self.process {
@@ -208,11 +384,29 @@ impl Relay {
                 Err(e) => {errors.push(format!("relay Job accounting unavailable: {e:#}")); break None;},
             }
         };
-        let verified = root_signaled && active == Some(0) && errors.is_empty();
+        let retained_members_signaled={
+            let mut records=self.observations.borrow_mut();
+            records.root["retainedHandleSignaled"]=serde_json::json!(root_signaled);
+            let mut all_signaled=true;
+            for member in &mut records.members {
+                let signaled=unsafe{WaitForSingleObject(member.handle.raw(),0)}==WAIT_OBJECT_0;
+                member.evidence["retainedHandleSignaled"]=serde_json::json!(signaled);
+                all_signaled &= signaled;
+            }
+            all_signaled
+        };
+        if !retained_members_signaled {errors.push("retained owner relay additional member not signaled".into());}
+        let diagnostics={let records=self.observations.borrow();serde_json::json!({"root":records.root,"initialRootObservation":records.initial_root,
+            "jobPidSnapshots":records.snapshots,"members":records.members.iter().map(|member|&member.evidence).collect::<Vec<_>>(),
+            "failedMembers":records.failed_members,"firstObservationError":records.first_error,"truncated":records.truncated,
+            "observationScope":"exact owned relay Job only; image classes and owner match, no raw account identities"})};
+        let verified = root_signaled && retained_members_signaled && active == Some(0) && errors.is_empty();
         let mut receipt = serde_json::json!({"schemaVersion":1,"scope":"LAB_PYTHON_ONLINE_PDF_ACCEPTANCE",
             "pid":self.pid,"ownerRelay":true,"assignedBeforeResume":self.assigned,
             "killOnJobClose":self.job.is_some(),"retainedRootHandleSignaled":root_signaled,
             "activeProcesses":active,"cleanupVerified":verified,"startupError":self.startup_error,
+            "retainedAdditionalHandlesSignaled":retained_members_signaled,"jobObservations":diagnostics,
+            "ownerJobObservationVerified":owner_job_observation_verified,
             "watchdog":watchdog,"elapsedMs":self.started.elapsed().as_millis(),"errors":errors,
             "nativeValidated":false,"durableReceiptVerified":true});
         let durable = (|| -> Result<()> {
@@ -619,6 +813,51 @@ fn validate_pdf(bytes:&[u8])->Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn owner_relay_allows_only_exact_images_owner_and_job_membership() {
+        assert_eq!(relay_image_role(lab::PYTHON),RelayImageRole::FixedPython);
+        assert_eq!(relay_image_role(r"c:\windows\system32\CONHOST.EXE"),RelayImageRole::SystemConsoleHost);
+        for image in [r"C:\other\conhost.exe",r"C:\Windows\SysWOW64\conhost.exe",r"C:\Windows\System32\conhost.exe.extra","conhost.exe"] {
+            assert_eq!(relay_image_role(image),RelayImageRole::Other);
+        }
+        assert!(relay_member_allowed(true,RelayImageRole::FixedPython,true,true));
+        assert!(relay_member_allowed(false,RelayImageRole::SystemConsoleHost,true,true));
+        for root in [false,true] {for owner in [false,true] {for job in [false,true] {
+            if !owner || !job {
+                assert!(!relay_member_allowed(root,RelayImageRole::FixedPython,owner,job));
+                assert!(!relay_member_allowed(root,RelayImageRole::SystemConsoleHost,owner,job));
+            }
+            assert!(!relay_member_allowed(root,RelayImageRole::Other,owner,job));
+        }}}
+        assert!(!relay_member_allowed(false,RelayImageRole::FixedPython,true,true));
+        assert!(!relay_member_allowed(true,RelayImageRole::SystemConsoleHost,true,true));
+    }
+    #[test]
+    fn owner_relay_snapshot_requires_root_and_at_most_one_extra() {
+        assert!(relay_snapshot_valid(1,1,&[101],101));
+        assert!(relay_snapshot_valid(2,2,&[101,202],101));
+        for (assigned,returned,pids) in [(0,0,vec![]),(2,1,vec![101]),(1,2,vec![101,202]),
+            (2,2,vec![101,101]),(2,2,vec![101,0]),(1,1,vec![202]),(3,3,vec![101,202,303]),
+            (9,9,vec![101,202])] {
+            assert!(!relay_snapshot_valid(assigned,returned,&pids,101));
+        }
+    }
+    #[test]
+    fn owner_relay_diagnostics_are_bounded_and_normalized() {
+        let mut records=RelayObservations::default();
+        for index in 0..32 {
+            records.snapshot(serde_json::json!({"assigned":index,"returned":0,"pids":[],"queryError":null}));
+            records.failed_member(serde_json::json!({"pid":index,"imageClass":"UNAVAILABLE"}));
+        }
+        records.failure(&"x".repeat(1024));
+        assert_eq!(records.snapshots.len(),RELAY_OBSERVATION_LIMIT);
+        assert_eq!(records.failed_members.len(),RELAY_OBSERVATION_LIMIT);
+        assert_eq!(records.first_error.as_ref().unwrap().len(),256);assert!(records.truncated);
+        let mut evidence=serde_json::json!({});
+        let error=relay_query_error(&mut evidence,"process-image-query",Some(5));
+        assert_eq!(evidence["queryError"]["winerror"],5);
+        assert!(error.to_string().contains("process-image-query"));
+    }
     fn success_log() -> (Vec<serde_json::Value>,serde_json::Value,u64) {
         let epoch=utc_ms("2026-10-06T00:00:00.000Z").unwrap();
         let ready=serde_json::json!({"schemaVersion":1,"pid":1234,"host":"127.0.0.1","port":43873,

@@ -688,7 +688,8 @@ fn run_suite(owner: &str, digest: &BTreeMap<String,String>, pins: &mut Vec<File>
             .is_some_and(|record|record["onlineArtifacts"]["artifactsVerified"]==true);
         let online_acceptance=lab::online_pdf_acceptance(&assessments,codex_core,
             summary["comparisonCompleted"]==true,online_relay_evidence["onlineFetchVerified"]==true,
-            verified(Case::OnlineInstall),verified(Case::OnlinePdf),online_relay_cleanup["cleanupVerified"]==true);
+            verified(Case::OnlineInstall),verified(Case::OnlinePdf),online_relay_cleanup["cleanupVerified"]==true
+                && online_relay_cleanup["ownerJobObservationVerified"]==true);
         summary["status"]=serde_json::json!(if boundary_fail {"POLICY_BOUNDARY_FAIL"}
             else if online_acceptance {"BOUNDED_ONLINE_PDF_ACCEPTANCE"} else {"INCONCLUSIVE"});
         summary["boundedCoreAcceptance"]=serde_json::json!(online_acceptance);
