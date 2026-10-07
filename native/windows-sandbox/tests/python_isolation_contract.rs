@@ -517,7 +517,8 @@ fn online_frame(case:Case)->Frame {
         script.online_install=Some(OnlineInstallEvidence {started_unix_ms:1_000_100,finished_unix_ms:1_004_900,
             pip_exit_code:0,target:PDF_DEPS.into(),report_path:r"C:\PiSandboxLab\work\pdf-install-report.json".into(),
             target_was_fresh:true,report_verified:true,installed,module_origins:origins,pip_output:"mock only".into(),
-            pip_output_truncated:false});
+            pip_output_truncated:false,pip_process_guard:PipProcessGuardEvidence {active:true,blocked_subprocess_attempts:3,
+                attempts_truncated:false,scope:PIP_PROCESS_GUARD_SCOPE.into()}});
     } else {
         script.online_pdf=Some(OnlinePdfEvidence {path:r"C:\PiSandboxLab\work\sandbox-test.pdf".into(),byte_count:1500,
             sha256:"a".repeat(64),page_count:1,expected_text:"Sandbox PDF test".into(),page_compression:0,invariant:true,
@@ -596,7 +597,7 @@ fn online_frame(case:Case)->Frame {
     }
     assert!(source.contains("runpy.run_module(\"pip\", run_name=\"__main__\", alter_sys=True)"));
     assert!(source.contains("\"PIP_CONFIG_FILE\": os.devnull"));assert!(source.contains("os.environ.clear()"));
-    assert!(!source.contains("pip._internal"));assert!(!source.contains("subprocess"));
+    assert!(!source.contains("pip._internal"));assert!(!source.contains("import subprocess"));assert!(!source.contains("subprocess.Popen("));
     assert!(!source.contains("trusted-host"));assert!(!source.contains("CERT_NONE"));
     assert!(source.contains("PDF.open(\"xb\")"));assert!(source.contains("\"PIL._imaging\""));
     assert!(source.contains("pagesize=A4, pdfVersion=(1, 4), pageCompression=0, invariant=1"));
@@ -651,4 +652,46 @@ fn online_frame(case:Case)->Frame {
     assert!(skip_branch.contains("skipped_online_pdf"));assert!(skip_branch.contains("send(&pipe,&frame"));
     assert!(skip_branch.contains("let ack:Recorded=receive"));assert!(skip_branch.contains("continue;"));
     assert!(!skip_branch.contains("run_fixed_python"));
+}
+
+
+#[cfg(feature="lab-python-online-pdf")]
+#[test] fn fixed_install_guard_receipt_is_required_and_bounded() {
+    for attempts in [0,3,16] {
+        let mut f=online_frame(Case::OnlineInstall);let mut script=parse_script(&f).unwrap();
+        script.online_install.as_mut().unwrap().pip_process_guard.blocked_subprocess_attempts=attempts;
+        set_script(&mut f,&script);assert!(parse_script(&f).is_ok());assert!(online_install_prerequisite_met(&f));
+    }
+    for mutation in 0..4 {
+        let mut f=online_frame(Case::OnlineInstall);let mut script=parse_script(&f).unwrap();
+        let guard=&mut script.online_install.as_mut().unwrap().pip_process_guard;
+        match mutation {0=>guard.active=false,1=>guard.scope="SECURITY_BOUNDARY".into(),
+            2=>guard.blocked_subprocess_attempts=17,_=>guard.attempts_truncated=true}
+        set_script(&mut f,&script);assert!(parse_script(&f).is_err());assert!(!online_install_prerequisite_met(&f));
+    }
+    let f=online_frame(Case::OnlineInstall);let script=parse_script(&f).unwrap();
+    let mut value=serde_json::to_value(&script).unwrap();
+    value["onlineInstall"].as_object_mut().unwrap().remove("pipProcessGuard");
+    assert!(serde_json::from_value::<ScriptEvidence>(value).is_err());
+    for field in ["active","blockedSubprocessAttempts","attemptsTruncated","scope"] {
+        let mut value=serde_json::to_value(&script).unwrap();
+        value["onlineInstall"]["pipProcessGuard"].as_object_mut().unwrap().remove(field);
+        assert!(serde_json::from_value::<ScriptEvidence>(value).is_err());
+    }
+    for count in [serde_json::json!(-1),serde_json::json!(u64::from(u32::MAX)+1)] {
+        let mut value=serde_json::to_value(&script).unwrap();
+        value["onlineInstall"]["pipProcessGuard"]["blockedSubprocessAttempts"]=count;
+        assert!(serde_json::from_value::<ScriptEvidence>(value).is_err());
+    }
+}
+#[cfg(feature="lab-python-online-pdf")]
+#[test] fn pip_diagnostic_truncation_is_separate_from_native_frame_or_guard_truncation() {
+    let mut f=online_frame(Case::OnlineInstall);let mut script=parse_script(&f).unwrap();
+    script.online_install.as_mut().unwrap().pip_output_truncated=true;
+    set_script(&mut f,&script);assert!(parse_script(&f).is_ok());assert!(online_install_prerequisite_met(&f));
+    f.run.as_mut().unwrap().truncated=true;
+    assert!(parse_script(&f).is_err());assert!(!online_install_prerequisite_met(&f));
+    f.run.as_mut().unwrap().truncated=false;
+    script.online_install.as_mut().unwrap().pip_process_guard.attempts_truncated=true;
+    set_script(&mut f,&script);assert!(parse_script(&f).is_err());assert!(!online_install_prerequisite_met(&f));
 }

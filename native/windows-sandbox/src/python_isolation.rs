@@ -640,6 +640,16 @@ pub struct ExecutionWindow {pub started_unix_ms:u64,pub finished_unix_ms:u64}
 #[derive(Debug,Clone,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
 pub struct InstalledPackage {pub name:String,pub version:String}
+/// Receipt for this fixed fixture adaptation. It is not stock pip behavior and
+/// never substitutes for the unchanged native token/Job/process observations.
+#[cfg(feature="lab-python-online-pdf")]
+#[derive(Debug,Clone,Serialize,Deserialize)]
+#[serde(rename_all="camelCase",deny_unknown_fields)]
+pub struct PipProcessGuardEvidence {
+    pub active:bool,pub blocked_subprocess_attempts:u32,pub attempts_truncated:bool,pub scope:String,
+}
+#[cfg(feature="lab-python-online-pdf")]
+pub const PIP_PROCESS_GUARD_SCOPE:&str="FIXED_INSTALL_COOPERATIVE_GUARD_NOT_SECURITY_BOUNDARY";
 #[cfg(feature="lab-python-online-pdf")]
 #[derive(Debug,Clone,Serialize,Deserialize)]
 #[serde(rename_all="camelCase",deny_unknown_fields)]
@@ -647,7 +657,7 @@ pub struct OnlineInstallEvidence {
     pub started_unix_ms:u64,pub finished_unix_ms:u64,pub pip_exit_code:i32,
     pub target:String,pub report_path:String,pub target_was_fresh:bool,pub report_verified:bool,
     pub installed:Vec<InstalledPackage>,pub module_origins:std::collections::BTreeMap<String,String>,
-    pub pip_output:String,pub pip_output_truncated:bool,
+    pub pip_output:String,pub pip_output_truncated:bool,pub pip_process_guard:PipProcessGuardEvidence,
 }
 #[cfg(feature="lab-python-online-pdf")]
 #[derive(Debug,Clone,Serialize,Deserialize)]
@@ -689,6 +699,8 @@ fn validate_online_script(frame:&Frame,result:&ScriptEvidence)->Result<()> {
         ensure!(install.pip_exit_code==0 && install.target==PDF_DEPS
             && install.report_path==r"C:\PiSandboxLab\work\pdf-install-report.json"
             && install.target_was_fresh && install.report_verified
+            && install.pip_process_guard.active && install.pip_process_guard.blocked_subprocess_attempts<=16
+            && !install.pip_process_guard.attempts_truncated && install.pip_process_guard.scope==PIP_PROCESS_GUARD_SCOPE
             && online_imports_valid(&install.installed,&install.module_origins)
             && install.started_unix_ms>=window.started_unix_ms && install.finished_unix_ms<=window.finished_unix_ms
             && install.started_unix_ms<=install.finished_unix_ms && install.pip_output.len()<=8192,
