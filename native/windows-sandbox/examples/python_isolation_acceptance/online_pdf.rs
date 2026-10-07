@@ -511,7 +511,7 @@ fn validate_relay_events(bytes:&[u8], ready:&serde_json::Value, launch_ms:u64, n
             let ms = event["unixMs"].as_u64().context("relay event unixMs missing")?;
             let mono = event["monotonicNs"].as_u64().context("relay event monotonicNs missing")?;
             ensure!(event["schemaVersion"] == 1 && utc_ms(event["utc"].as_str().context("relay UTC absent")?)? == ms
-                && mono > previous_mono && ms >= previous_ms && ms <= now_ms, "relay event clock/order mismatch");
+                && mono > 0 && mono >= previous_mono && ms >= previous_ms && ms <= now_ms, "relay event clock/order mismatch");
             previous_mono = mono; previous_ms = ms;
             let base = ["schemaVersion","event","utc","unixMs","monotonicNs"];
             if name == "relay_ready" {
@@ -887,6 +887,22 @@ mod tests {
     fn successful_fourteen_event_live_log() {
         let (events,ready,epoch)=success_log();
         assert_eq!(validate_relay_events(&encoded(&events),&ready,epoch,epoch+200,epoch+10,epoch+100).unwrap().len(),14);
+    }
+    #[test]
+    fn relay_clock_ties_preserve_required_request_stage_order() {
+        let (mut events,ready,epoch)=success_log();
+        // Windows monotonic clock resolution may make successive records equal.
+        events[5]["monotonicNs"]=events[4]["monotonicNs"].clone();
+        assert!(validate_relay_events(&encoded(&events),&ready,epoch,epoch+200,epoch+10,epoch+100).is_ok());
+        let mut backward=events.clone();
+        backward[5]["monotonicNs"]=serde_json::json!(events[4]["monotonicNs"].as_u64().unwrap()-1);
+        assert!(validate_relay_events(&encoded(&backward),&ready,epoch,epoch+200,epoch+10,epoch+100).is_err());
+        let mut zero=events.clone();zero[0]["monotonicNs"]=serde_json::json!(0);
+        assert!(validate_relay_events(&encoded(&zero),&ready,epoch,epoch+200,epoch+10,epoch+100).is_err());
+        // Even equal timestamps cannot authorize serving before hash verification.
+        events[4]["unixMs"]=events[5]["unixMs"].clone();events[4]["utc"]=events[5]["utc"].clone();
+        events.swap(4,5);
+        assert!(validate_relay_events(&encoded(&events),&ready,epoch,epoch+200,epoch+10,epoch+100).is_err());
     }
     #[test]
     fn live_log_rejects_missing_duplicate_unexpected_and_out_of_window_events() {

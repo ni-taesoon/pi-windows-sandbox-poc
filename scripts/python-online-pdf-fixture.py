@@ -5,6 +5,7 @@ relay. --no-index disables package discovery, not the direct requirement URLs.
 The trusted owner relay independently fetches and hashes exact HTTPS wheel bytes.
 """
 import contextlib
+import errno
 import hashlib
 import importlib
 import importlib.metadata
@@ -41,7 +42,7 @@ PIP_ARGS = (
 
 STAGES = frozenset((
     "ENTRY", "INSTALL_FRESHNESS", "INSTALL_CREATE_TARGET", "INSTALL_CHECK_TARGET_EMPTY",
-    "INSTALL_BOOTSTRAP_PATH", "INSTALL_RUN_PIP", "INSTALL_VERIFY_REPORT",
+    "INSTALL_BOOTSTRAP_PATH", "INSTALL_PROCESS_GUARD", "INSTALL_RUN_PIP", "INSTALL_VERIFY_REPORT",
     "INSTALL_TARGET_IMPORTS", "INSTALL_DISTRIBUTION_READBACK", "INSTALL_MODULE_IMPORTS",
     "PDF_BOOTSTRAP_PATH", "PDF_DISTRIBUTION_READBACK", "PDF_MODULE_IMPORTS",
     "PDF_IMPORT_CANVAS", "PDF_CREATE_DOCUMENT", "PDF_WRITE_DOCUMENT",
@@ -89,6 +90,34 @@ def failure_evidence(error):
             "sourceTrace": frames[-8:], "traceTruncated": visited > 8 or trace is not None,
             "capturedPipOutputByteCount": _PIP_CAPTURE.size if _PIP_CAPTURE is not None else 0,
             "capturedPipOutputTruncated": _PIP_CAPTURE.truncated if _PIP_CAPTURE is not None else False}
+
+
+PIP_GUARD_SCOPE = "FIXED_INSTALL_COOPERATIVE_GUARD_NOT_SECURITY_BOUNDARY"
+_PIP_PROCESS_GUARD = {"active": False, "blockedSubprocessAttempts": 0,
+                      "attemptsTruncated": False, "scope": PIP_GUARD_SCOPE}
+
+
+def pip_process_audit(event, _args):
+    # Public audit API, cooperative fixed-fixture behavior only. It is not a
+    # security boundary; the native token/Job observer still rejects extra children.
+    if event == "pi.online_pdf.process_guard_probe":
+        _PIP_PROCESS_GUARD["active"] = True
+    elif event == "subprocess.Popen":
+        count = _PIP_PROCESS_GUARD["blockedSubprocessAttempts"]
+        _PIP_PROCESS_GUARD["attemptsTruncated"] |= count >= 16
+        _PIP_PROCESS_GUARD["blockedSubprocessAttempts"] = min(count + 1, 16)
+        # CPython's optional Windows `ver` probe catches OSError and naturally
+        # falls back to sys.getwindowsversion. Never expose command arguments.
+        raise PermissionError(errno.EACCES, "fixed install fixture disallows child processes")
+
+
+def activate_pip_process_guard():
+    if _PIP_PROCESS_GUARD["active"]:
+        raise RuntimeError("fixed install process guard already active")
+    sys.addaudithook(pip_process_audit)
+    sys.audit("pi.online_pdf.process_guard_probe")
+    if not _PIP_PROCESS_GUARD["active"]:
+        raise RuntimeError("fixed install process guard registration unverified")
 
 
 def canonical_name(value):
@@ -225,6 +254,8 @@ def online_install():
     initial_path = tuple(sys.path)
     if any("site-packages" in part.lower() for part in initial_path):
         raise RuntimeError("isolated startup contained site-packages")
+    mark_stage("INSTALL_PROCESS_GUARD")
+    activate_pip_process_guard()
     sys.path.insert(0, str(RUNTIME_SITE))
     output = BoundedOutput()
     _PIP_CAPTURE = output
@@ -256,7 +287,8 @@ def online_install():
     return {"startedUnixMs": started, "finishedUnixMs": utc_ms(), "pipExitCode": pip_exit_code,
             "target": str(DEPS), "reportPath": str(REPORT), "targetWasFresh": True,
             "reportVerified": report_verified, "installed": installed, "moduleOrigins": origins,
-            "pipOutput": output.value(), "pipOutputTruncated": output.truncated}
+            "pipOutput": output.value(), "pipOutputTruncated": output.truncated,
+            "pipProcessGuard": dict(_PIP_PROCESS_GUARD)}
 
 
 def online_pdf():
@@ -325,6 +357,7 @@ def main():
         # The fixed type is diagnostic only; no local paths or unbounded errors.
         result["errorType"] = type(error).__name__[:64]
         result["failure"] = failure_evidence(error)
+        result["failure"]["pipProcessGuard"] = dict(_PIP_PROCESS_GUARD)
         if isinstance(error, FixedPipFailure):
             result["pipFailure"] = {"exitCode": error.exit_code, "output": error.output,
                                     "outputTruncated": error.truncated}

@@ -1,5 +1,6 @@
 """Pure online-PDF fixture mocks. Never import wheels, invoke pip or open sockets."""
 import importlib.util
+import ast
 import hashlib
 import json
 import os
@@ -52,7 +53,16 @@ class OnlineFixtureTests(unittest.TestCase):
         self.assertIn('runpy.run_module("pip", run_name="__main__", alter_sys=True)', source)
         self.assertNotIn('pip._internal', source)
         self.assertNotIn('ensurepip', source)
-        self.assertNotIn('subprocess', source)
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node,ast.Import):
+                self.assertFalse(any(alias.name=='subprocess' for alias in node.names))
+            if isinstance(node,ast.ImportFrom):
+                self.assertNotEqual(node.module,'subprocess')
+            if isinstance(node,ast.Name):
+                self.assertNotEqual(node.id,'subprocess')
+        self.assertIn('event == "subprocess.Popen"',source)
+        self.assertIn('sys.addaudithook(pip_process_audit)',source)
         self.assertIn('"PIP_CONFIG_FILE": os.devnull', source)
 
     def test_environment_discards_all_unapproved_configuration(self):
@@ -107,6 +117,48 @@ class OnlineFixtureTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 module.get_win_folder('CSIDL_PERSONAL')
             resolve.assert_called_once_with('CSIDL_PERSONAL')
+
+    def test_cooperative_process_guard_registration_and_bounded_denials(self):
+        state = {"active":False,"blockedSubprocessAttempts":0,"attemptsTruncated":False,
+                 "scope":fixture.PIP_GUARD_SCOPE}
+        hooks = []
+        with patch.object(fixture, '_PIP_PROCESS_GUARD',state), \
+                patch.object(fixture.sys,'addaudithook',side_effect=hooks.append), \
+                patch.object(fixture.sys,'audit',side_effect=lambda event: hooks[0](event,())):
+            fixture.activate_pip_process_guard()
+            self.assertTrue(state['active'])
+            for _ in range(20):
+                with self.assertRaises(PermissionError) as raised:
+                    hooks[0]('subprocess.Popen',('PRIVATE_ARGUMENT',))
+                self.assertNotIn('PRIVATE_ARGUMENT',str(raised.exception))
+            self.assertEqual(state['blockedSubprocessAttempts'],16)
+            self.assertTrue(state['attemptsTruncated'])
+            hooks[0]('unrelated.event',('PRIVATE_ARGUMENT',))
+        state['active'] = False
+        with patch.object(fixture,'_PIP_PROCESS_GUARD',state), \
+                patch.object(fixture.sys,'addaudithook'),patch.object(fixture.sys,'audit'):
+            with self.assertRaises(RuntimeError): fixture.activate_pip_process_guard()
+
+    @unittest.skipUnless(os.name == 'nt', 'exact CPython Windows fallback runs in pre-security CI')
+    def test_windows_platform_uses_real_os_version_when_shell_probe_is_denied(self):
+        import platform
+        import subprocess
+        import _winapi
+        self.assertEqual(sys.version_info[:3],(3,12,10))
+        actual = sys.getwindowsversion()
+        actual_version = getattr(actual,'platform_version',None) or actual[:3]
+        expected = '.'.join(map(str,actual_version))
+        state = {"active":True,"blockedSubprocessAttempts":0,"attemptsTruncated":False,
+                 "scope":fixture.PIP_GUARD_SCOPE}
+        with patch.object(fixture,'_PIP_PROCESS_GUARD',state), \
+                patch.object(platform,'_wmi_query',side_effect=OSError('synthetic WMI unavailable')), \
+                patch.object(subprocess.sys,'audit',side_effect=lambda event,*args: fixture.pip_process_audit(event,args)), \
+                patch.object(_winapi,'CreateProcess',side_effect=AssertionError('process must not start')) as spawn:
+            version = platform.win32_ver()[1]
+        self.assertEqual(version,expected)
+        self.assertEqual(state['blockedSubprocessAttempts'],3)
+        self.assertFalse(state['attemptsTruncated'])
+        spawn.assert_not_called()
 
     def test_exact_three_live_relay_receipts_required(self):
         self.assertTrue(self.verify_report(self.report()))
@@ -202,6 +254,7 @@ class OnlineFixtureTests(unittest.TestCase):
                 patch.object(fixture.pathlib.Path, 'iterdir', return_value=iter(())), \
                 patch.object(fixture.sys, 'path', ['fixed-stdlib']), \
                 patch.object(fixture.sys, 'argv', ['fixed']), \
+                patch.object(fixture, 'activate_pip_process_guard'), \
                 patch.object(fixture.runpy, 'run_module', side_effect=failing_pip):
             try:
                 fixture.online_install()
